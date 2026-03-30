@@ -1,0 +1,634 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// RBAC (Admin Panel)
+// ============================================
+
+model Moderator {
+  id        String        @id @default(cuid())
+  email     String        @unique
+  password  String
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  roles ModeratorRole[]
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  moderators  ModeratorRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  roles RolePermission[]
+}
+
+model ModeratorRole {
+  moderator   Moderator @relation(fields: [moderatorId], references: [id])
+  moderatorId String
+  role        Role      @relation(fields: [roleId], references: [id])
+  roleId      String
+  assignedAt  DateTime  @default(now())
+
+  @@id([moderatorId, roleId])
+}
+
+model RolePermission {
+  role         Role       @relation(fields: [roleId], references: [id])
+  roleId       String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  permissionId String
+  assignedAt   DateTime   @default(now())
+
+  @@id([roleId, permissionId])
+}
+
+// ============================================
+// Enums
+// ============================================
+
+enum UserRole {
+  GUEST
+  HOST
+  BOTH
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum PropertyType {
+  APARTMENT
+  HOUSE
+  VILLA
+  COTTAGE
+  CABIN
+  STUDIO
+  HOTEL
+  UNIQUE
+}
+
+enum RoomType {
+  ENTIRE_PLACE
+  PRIVATE_ROOM
+  SHARED_ROOM
+}
+
+enum ListingStatus {
+  DRAFT
+  PUBLISHED
+  UNLISTED
+  SUSPENDED
+}
+
+enum CancellationPolicy {
+  FLEXIBLE
+  MODERATE
+  FIRM
+  LIMITED
+}
+
+enum AmenityCategory {
+  ESSENTIALS
+  FEATURES
+  SAFETY
+  LOCATION
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  COMPLETED
+  CANCELLED_BY_GUEST
+  CANCELLED_BY_HOST
+  DECLINED
+  EXPIRED
+}
+
+enum BookingType {
+  INSTANT
+  REQUEST
+}
+
+enum PaymentMethod {
+  CARD
+  BANK
+  UPI
+  WALLET
+}
+
+enum PaymentGateway {
+  RAZORPAY
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PayoutMethod {
+  BANK_TRANSFER
+  UPI
+  PAYPAL
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ReviewType {
+  GUEST_TO_HOST
+  HOST_TO_GUEST
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  BOOKING_REQUEST
+  SYSTEM
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  NEW_MESSAGE
+  NEW_REVIEW
+  PAYOUT_SENT
+  BOOKING_REQUEST
+  BOOKING_REMINDER
+  PRICE_CHANGE
+}
+
+enum ReportReason {
+  SAFETY
+  FRAUD
+  DAMAGE
+  INACCURATE_LISTING
+  HARASSMENT
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+// ============================================
+// Users & Auth
+// ============================================
+
+model User {
+  id              String    @id @default(uuid())
+  email           String?   @unique
+  firstName       String?
+  lastName        String?
+  phone           String    @unique
+  avatarUrl       String?
+  dateOfBirth     DateTime?
+  gender          Gender?
+  bio             String?
+  role            UserRole  @default(GUEST)
+  isPhoneVerified Boolean   @default(false)
+  isSuspended     Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  refreshTokens        RefreshToken[]
+  listings             Listing[]
+  bookingsAsGuest      Booking[]      @relation("GuestBookings")
+  bookingsAsHost       Booking[]      @relation("HostBookings")
+  payments             Payment[]
+  payouts              Payout[]
+  payoutMethods        PayoutMethod_[]
+  reviewsGiven         Review[]       @relation("ReviewsGiven")
+  reviewsReceived      Review[]       @relation("ReviewsReceived")
+  conversationsAsGuest Conversation[] @relation("GuestConversations")
+  conversationsAsHost  Conversation[] @relation("HostConversations")
+  messagesSent         Message[]
+  wishlists            Wishlist[]
+  notifications        Notification[]
+  reportsCreated       Report[]       @relation("ReportsCreated")
+  reportsReceived      Report[]       @relation("ReportsReceived")
+  reportsResolved      Report[]       @relation("ReportsResolved")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  isRevoked Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model Otp {
+  id        String   @id @default(uuid())
+  phone     String
+  code      String
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+  @@index([phone, code])
+}
+
+// ============================================
+// Listings
+// ============================================
+
+model Listing {
+  id                 String             @id @default(uuid())
+  hostId             String
+  host               User               @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  title              String
+  description        String
+  propertyType       PropertyType
+  roomType           RoomType
+  status             ListingStatus      @default(DRAFT)
+  addressLine1       String
+  addressLine2       String?
+  city               String
+  state              String
+  country            String
+  postalCode         String?
+  latitude           Float?
+  longitude          Float?
+  maxGuests          Int
+  bedrooms           Int
+  beds               Int
+  bathrooms          Float
+  checkInTime        String?
+  checkOutTime       String?
+  basePrice          Float
+  cleaningFee        Float              @default(0)
+  minimumStay        Int                @default(1)
+  cancellationPolicy CancellationPolicy @default(FLEXIBLE)
+  instantBook        Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  images        ListingImage[]
+  amenities     ListingAmenity[]
+  houseRules    HouseRule[]
+  availability  ListingAvailability[]
+  bookings      Booking[]
+  reviews       Review[]
+  conversations Conversation[]
+  wishlistItems WishlistItem[]
+  reports       Report[]
+
+  @@index([hostId])
+  @@index([city, country])
+  @@index([status])
+  @@index([propertyType])
+  @@index([basePrice])
+}
+
+model ListingImage {
+  id        String   @id @default(uuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String
+  caption   String?
+  sortOrder Int      @default(0)
+  isCover   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([listingId])
+}
+
+model Amenity {
+  id        String          @id @default(uuid())
+  name      String          @unique
+  icon      String?
+  category  AmenityCategory
+  sortOrder Int             @default(0)
+
+  listings ListingAmenity[]
+}
+
+model ListingAmenity {
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  amenityId String
+  amenity   Amenity @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([listingId, amenityId])
+}
+
+model HouseRule {
+  id        String  @id @default(uuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  ruleText  String
+  isCustom  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  @@index([listingId])
+}
+
+model ListingAvailability {
+  id                  String   @id @default(uuid())
+  listingId           String
+  listing             Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  date                DateTime @db.Date
+  isAvailable         Boolean  @default(true)
+  customPrice         Float?
+  minimumStayOverride Int?
+  notes               String?
+  updatedAt           DateTime @updatedAt
+
+  @@unique([listingId, date])
+  @@index([listingId])
+  @@index([date])
+}
+
+// ============================================
+// Bookings
+// ============================================
+
+model Booking {
+  id                   String        @id @default(uuid())
+  listingId            String
+  listing              Listing       @relation(fields: [listingId], references: [id])
+  guestId              String
+  guest                User          @relation("GuestBookings", fields: [guestId], references: [id])
+  hostId               String
+  host                 User          @relation("HostBookings", fields: [hostId], references: [id])
+  checkInDate          DateTime      @db.Date
+  checkOutDate         DateTime      @db.Date
+  numGuests            Int
+  numNights            Int
+  basePricePerNight    Float
+  cleaningFee          Float         @default(0)
+  serviceFee           Float
+  hostServiceFee       Float
+  totalPrice           Float
+  hostPayout           Float
+  currency             String        @default("INR")
+  status               BookingStatus @default(PENDING)
+  bookingType          BookingType
+  specialRequests      String?
+  guestMessage         String?
+  hostResponseDeadline DateTime?
+  cancelledAt          DateTime?
+  cancellationReason   String?
+  refundAmount         Float?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  payment      Payment?
+  payout       Payout?
+  reviews      Review[]
+  conversation Conversation?
+  reports      Report[]
+
+  @@index([guestId])
+  @@index([hostId])
+  @@index([listingId])
+  @@index([status])
+  @@index([checkInDate, checkOutDate])
+}
+
+// ============================================
+// Payments & Payouts
+// ============================================
+
+model Payment {
+  id                   String         @id @default(uuid())
+  bookingId            String         @unique
+  booking              Booking        @relation(fields: [bookingId], references: [id])
+  payerId              String
+  payer                User           @relation(fields: [payerId], references: [id])
+  amount               Float
+  currency             String         @default("INR")
+  paymentMethod        PaymentMethod
+  paymentGateway       PaymentGateway @default(RAZORPAY)
+  gatewayTransactionId String?        @unique
+  status               PaymentStatus  @default(PENDING)
+  paidAt               DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([payerId])
+  @@index([status])
+}
+
+model Payout {
+  id           String       @id @default(uuid())
+  bookingId    String       @unique
+  booking      Booking      @relation(fields: [bookingId], references: [id])
+  hostId       String
+  host         User         @relation(fields: [hostId], references: [id])
+  amount       Float
+  currency     String       @default("INR")
+  payoutMethod PayoutMethod
+  status       PayoutStatus @default(PENDING)
+  scheduledAt  DateTime?
+  paidAt       DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([hostId])
+  @@index([status])
+}
+
+model PayoutMethod_ {
+  id         String       @id @default(uuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  methodType PayoutMethod
+  details    Json
+  isDefault  Boolean      @default(false)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([userId])
+  @@map("payout_methods")
+}
+
+// ============================================
+// Reviews
+// ============================================
+
+model Review {
+  id           String     @id @default(uuid())
+  bookingId    String
+  booking      Booking    @relation(fields: [bookingId], references: [id])
+  reviewerId   String
+  reviewer     User       @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  revieweeId   String
+  reviewee     User       @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+  listingId    String
+  listing      Listing    @relation(fields: [listingId], references: [id])
+  type         ReviewType
+  rating       Int
+  comment      String?
+  hostResponse String?
+  isPublic     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([bookingId, reviewerId])
+  @@index([listingId])
+  @@index([revieweeId])
+  @@index([isPublic])
+}
+
+// ============================================
+// Messaging
+// ============================================
+
+model Conversation {
+  id                String    @id @default(uuid())
+  bookingId         String?   @unique
+  booking           Booking?  @relation(fields: [bookingId], references: [id])
+  listingId         String
+  listing           Listing   @relation(fields: [listingId], references: [id])
+  guestId           String
+  guest             User      @relation("GuestConversations", fields: [guestId], references: [id])
+  hostId            String
+  host              User      @relation("HostConversations", fields: [hostId], references: [id])
+  lastMessageAt     DateTime?
+  isArchivedByGuest Boolean   @default(false)
+  isArchivedByHost  Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  messages Message[]
+
+  @@index([guestId])
+  @@index([hostId])
+  @@index([listingId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id])
+  content        String
+  messageType    MessageType  @default(TEXT)
+  isRead         Boolean      @default(false)
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+  @@index([senderId])
+}
+
+// ============================================
+// Wishlists
+// ============================================
+
+model Wishlist {
+  id        String         @id @default(uuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  items WishlistItem[]
+
+  @@index([userId])
+}
+
+model WishlistItem {
+  id         String   @id @default(uuid())
+  wishlistId String
+  wishlist   Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
+  listingId  String
+  listing    Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@unique([wishlistId, listingId])
+  @@index([wishlistId])
+}
+
+// ============================================
+// Notifications
+// ============================================
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+// ============================================
+// Reports
+// ============================================
+
+model Report {
+  id                String       @id @default(uuid())
+  reporterId        String
+  reporter          User         @relation("ReportsCreated", fields: [reporterId], references: [id])
+  reportedUserId    String?
+  reportedUser      User?        @relation("ReportsReceived", fields: [reportedUserId], references: [id])
+  reportedListingId String?
+  reportedListing   Listing?     @relation(fields: [reportedListingId], references: [id])
+  bookingId         String?
+  booking           Booking?     @relation(fields: [bookingId], references: [id])
+  reason            ReportReason
+  description       String
+  status            ReportStatus @default(OPEN)
+  adminNotes        String?
+  resolvedAt        DateTime?
+  resolvedById      String?
+  resolvedBy        User?        @relation("ReportsResolved", fields: [resolvedById], references: [id])
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([reporterId])
+  @@index([status])
+}
