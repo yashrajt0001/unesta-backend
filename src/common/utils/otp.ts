@@ -4,8 +4,7 @@ import { env } from '../config/env.js';
 import { logger } from './logger.js';
 
 const generateOtp = (): string => {
-  if (env.NODE_ENV === 'development') return '123456';
-  return crypto.randomInt(100000, 999999).toString();
+ return '123456';
 };
 
 export const storeOtp = async (phone: string): Promise<string> => {
