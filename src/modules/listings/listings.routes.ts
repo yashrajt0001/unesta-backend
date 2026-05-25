@@ -17,6 +17,7 @@ import {
   addListingImage,
   deleteListingImage,
   setCoverImage,
+  reorderImages,
 } from './listings.controller.js';
 import {
   createListingSchema,
@@ -30,6 +31,7 @@ import {
   getMyListingsSchema,
   deleteListingImageSchema,
   setCoverImageSchema,
+  reorderImagesSchema,
 } from './listings.validation.js';
 
 const router = Router();
@@ -55,6 +57,7 @@ router.delete('/:id/house-rules/:ruleId', validate(deleteHouseRuleSchema), delet
 router.put('/:id/availability', validate(updateAvailabilitySchema), updateAvailability);
 
 router.post('/:id/images', uploadSingle, addListingImage);
+router.put('/:id/images/reorder', validate(reorderImagesSchema), reorderImages);
 router.delete('/:id/images/:imageId', validate(deleteListingImageSchema), deleteListingImage);
 router.patch('/:id/images/:imageId/cover', validate(setCoverImageSchema), setCoverImage);
 

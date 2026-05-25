@@ -133,6 +133,31 @@ export const getPayoutMethodsService = async (userId: string) => {
   });
 };
 
+export const updatePayoutMethodService = async (
+  id: string,
+  userId: string,
+  input: { details?: Record<string, string>; isDefault?: boolean },
+) => {
+  const method = await prisma.payoutMethod_.findUnique({ where: { id } });
+  if (!method) throw new AppError('Payout method not found', 404);
+  if (method.userId !== userId) throw new AppError('Forbidden', 403);
+
+  if (input.isDefault) {
+    await prisma.payoutMethod_.updateMany({
+      where: { userId, isDefault: true },
+      data: { isDefault: false },
+    });
+  }
+
+  return prisma.payoutMethod_.update({
+    where: { id },
+    data: {
+      ...(input.details && { details: input.details }),
+      ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
+    },
+  });
+};
+
 export const deletePayoutMethodService = async (id: string, userId: string) => {
   const method = await prisma.payoutMethod_.findUnique({ where: { id } });
   if (!method) throw new AppError('Payout method not found', 404);

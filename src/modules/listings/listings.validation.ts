@@ -138,6 +138,25 @@ export const setCoverImageSchema = z.object({
   }),
 });
 
+export const getHostListingsSchema = z.object({
+  params: z.object({
+    userId: z.string().uuid('Invalid user ID'),
+  }),
+  query: z.object({
+    page: z.coerce.number().int().positive().optional().default(1),
+    limit: z.coerce.number().int().positive().max(50).optional().default(10),
+  }),
+});
+
+export const reorderImagesSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid listing ID'),
+  }),
+  body: z.object({
+    imageIds: z.array(z.string().uuid()).min(1),
+  }),
+});
+
 export const getMyListingsSchema = z.object({
   query: z.object({
     page: z.coerce.number().int().positive().optional().default(1),

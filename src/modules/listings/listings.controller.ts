@@ -3,6 +3,7 @@ import {
   createListingService,
   getListingByIdService,
   getMyListingsService,
+  getHostPublicListingsService,
   updateListingService,
   updateListingStatusService,
   deleteListingService,
@@ -14,6 +15,7 @@ import {
   addListingImageService,
   deleteListingImageService,
   setCoverImageService,
+  reorderImagesService,
 } from './listings.service.js';
 import { asyncHandler } from '../../common/types/index.js';
 import { uploadToCloudinary } from '../../common/utils/upload.js';
@@ -104,6 +106,22 @@ export const setCoverImage = asyncHandler(async (req: Request, res: Response) =>
     req.user!.userId,
   );
   res.status(200).json({ success: true, ...result });
+});
+
+export const getHostListings = asyncHandler(async (req: Request, res: Response) => {
+  const page = Number(req.query['page']) || 1;
+  const limit = Number(req.query['limit']) || 10;
+  const result = await getHostPublicListingsService(req.params['userId'] as string, page, limit);
+  res.status(200).json({ success: true, message: 'Host listings retrieved', ...result });
+});
+
+export const reorderImages = asyncHandler(async (req: Request, res: Response) => {
+  const images = await reorderImagesService(
+    req.params['id'] as string,
+    req.user!.userId,
+    req.body.imageIds as string[],
+  );
+  res.status(200).json({ success: true, message: 'Images reordered', data: images });
 });
 
 export const getAllAmenities = asyncHandler(async (_req: Request, res: Response) => {

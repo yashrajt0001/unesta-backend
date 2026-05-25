@@ -7,6 +7,7 @@ import {
   getMyPayouts,
   addPayoutMethod,
   getPayoutMethods,
+  updatePayoutMethod,
   deletePayoutMethod,
 } from './payments.controller.js';
 import {
@@ -15,6 +16,7 @@ import {
   getMyPayoutsSchema,
   addPayoutMethodSchema,
   payoutMethodIdParamSchema,
+  updatePayoutMethodSchema,
 } from './payments.validation.js';
 
 const router = Router();
@@ -32,6 +34,7 @@ router.get('/payouts', validate(getMyPayoutsSchema), getMyPayouts);
 // Payout methods
 router.post('/payout-methods', validate(addPayoutMethodSchema), addPayoutMethod);
 router.get('/payout-methods', getPayoutMethods);
+router.put('/payout-methods/:id', validate(updatePayoutMethodSchema), updatePayoutMethod);
 router.delete('/payout-methods/:id', validate(payoutMethodIdParamSchema), deletePayoutMethod);
 
 export default router;

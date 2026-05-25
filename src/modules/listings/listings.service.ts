@@ -421,6 +421,59 @@ export const setCoverImageService = async (
   return { message: 'Cover image updated' };
 };
 
+// ─── Public host listings ──────────────────────────────────────────────────────
+
+export const getHostPublicListingsService = async (hostId: string, page: number, limit: number) => {
+  const where = { hostId, status: 'PUBLISHED' as const };
+
+  const [listings, total] = await Promise.all([
+    prisma.listing.findMany({
+      where,
+      select: listingSelectPublic,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.listing.count({ where }),
+  ]);
+
+  return {
+    listings,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  };
+};
+
+// ─── Image reorder ─────────────────────────────────────────────────────────────
+
+export const reorderImagesService = async (
+  listingId: string,
+  hostId: string,
+  imageIds: string[],
+) => {
+  const listing = await prisma.listing.findUnique({ where: { id: listingId } });
+  if (!listing) throw new AppError('Listing not found', 404);
+  if (listing.hostId !== hostId) throw new AppError('Forbidden', 403);
+
+  const images = await prisma.listingImage.findMany({ where: { listingId } });
+  const existingIds = new Set(images.map((img) => img.id));
+
+  if (imageIds.length !== images.length || imageIds.some((id) => !existingIds.has(id))) {
+    throw new AppError('imageIds must contain all images for this listing exactly once', 400);
+  }
+
+  await Promise.all(
+    imageIds.map((id, index) =>
+      prisma.listingImage.update({ where: { id }, data: { sortOrder: index } }),
+    ),
+  );
+
+  return prisma.listingImage.findMany({
+    where: { listingId },
+    orderBy: { sortOrder: 'asc' },
+    select: { id: true, url: true, sortOrder: true, isCover: true },
+  });
+};
+
 // ─── Amenities ─────────────────────────────────────────────────────────────────
 
 export const getAllAmenitiesService = async () => {

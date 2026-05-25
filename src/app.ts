@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { env } from './common/config/env.js';
 import { apiRateLimiter } from './common/middleware/rate-limiter.js';
 import { errorHandler, notFoundHandler } from './common/middleware/error-handler.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -25,8 +26,10 @@ app.use(helmet());
 // CORS
 app.use(
   cors({
-    origin: true,
+    origin: [env.WEB_APP_URL, env.HOST_APP_URL, env.ADMIN_APP_URL],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   }),
 );
 

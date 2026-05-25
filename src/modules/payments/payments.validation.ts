@@ -45,3 +45,22 @@ export const payoutMethodIdParamSchema = z.object({
     id: z.string().uuid('Invalid payout method ID'),
   }),
 });
+
+export const updatePayoutMethodSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid payout method ID'),
+  }),
+  body: z.object({
+    details: z.object({
+      accountHolderName: z.string().min(1).optional(),
+      accountNumber: z.string().min(1).optional(),
+      ifscCode: z.string().min(1).optional(),
+      bankName: z.string().min(1).optional(),
+      upiId: z.string().min(1).optional(),
+      paypalEmail: z.string().email().optional(),
+    }).optional(),
+    isDefault: z.boolean().optional(),
+  }).refine((d) => d.details !== undefined || d.isDefault !== undefined, {
+    message: 'Provide at least one of details or isDefault',
+  }),
+});

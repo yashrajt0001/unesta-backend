@@ -6,6 +6,7 @@ import {
   getMyPayoutsService,
   addPayoutMethodService,
   getPayoutMethodsService,
+  updatePayoutMethodService,
   deletePayoutMethodService,
 } from './payments.service.js';
 import type { PaymentStatus, PayoutStatus } from '@prisma/client';
@@ -39,6 +40,11 @@ export const addPayoutMethod = asyncHandler(async (req: Request, res: Response) 
 export const getPayoutMethods = asyncHandler(async (req: Request, res: Response) => {
   const methods = await getPayoutMethodsService(req.user!.userId);
   res.status(200).json({ success: true, message: 'Payout methods retrieved', data: methods });
+});
+
+export const updatePayoutMethod = asyncHandler(async (req: Request, res: Response) => {
+  const method = await updatePayoutMethodService(req.params['id'] as string, req.user!.userId, req.body);
+  res.status(200).json({ success: true, message: 'Payout method updated', data: method });
 });
 
 export const deletePayoutMethod = asyncHandler(async (req: Request, res: Response) => {
