@@ -215,7 +215,7 @@ model User {
   email           String?   @unique
   firstName       String?
   lastName        String?
-  phone           String    @unique
+  phone           String?   @unique
   avatarUrl       String?
   dateOfBirth     DateTime?
   gender          Gender?
@@ -226,7 +226,7 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  refreshTokens        RefreshToken[]
+  googleAccount        GoogleAccount?
   listings             Listing[]
   bookingsAsGuest      Booking[]      @relation("GuestBookings")
   bookingsAsHost       Booking[]      @relation("HostBookings")
@@ -245,17 +245,17 @@ model User {
   reportsResolved      Report[]       @relation("ReportsResolved")
 }
 
-model RefreshToken {
+model GoogleAccount {
   id        String   @id @default(uuid())
-  token     String   @unique
-  userId    String
+  userId    String   @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  isRevoked Boolean  @default(false)
+  googleId  String   @unique
+  email     String
+  firstName String?
+  lastName  String?
+  avatarUrl String?
   createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([token])
+  updatedAt DateTime @updatedAt
 }
 
 model Otp {

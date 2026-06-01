@@ -66,13 +66,6 @@ export const deleteAccountService = async (userId: string) => {
     throw new AppError('User not found', 404);
   }
 
-  // Revoke all refresh tokens
-  await prisma.refreshToken.updateMany({
-    where: { userId },
-    data: { isRevoked: true },
-  });
-
-  // Delete user (cascade will handle refresh tokens)
   await prisma.user.delete({ where: { id: userId } });
 
   return { message: 'Account deleted successfully' };

@@ -19,8 +19,8 @@ export const verifyOtpSchema = z.object({
   }),
 });
 
-export const refreshTokenSchema = z.object({
+export const googleAuthSchema = z.object({
   body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token is required'),
+    idToken: z.string().min(1, 'idToken is required'),
   }),
 });

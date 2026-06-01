@@ -1,9 +1,12 @@
-import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
+import type { User } from '@prisma/client';
 import { prisma } from '../../common/config/database.js';
 import { env } from '../../common/config/env.js';
-import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../../common/utils/jwt.js';
+import { generateAccessToken } from '../../common/utils/jwt.js';
 import { storeOtp, verifyOtp } from '../../common/utils/otp.js';
 import { AppError } from '../../common/middleware/error-handler.js';
+
+const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 
 export const sendOtpService = async (phone: string) => {
   await storeOtp(phone);
@@ -16,7 +19,6 @@ export const verifyOtpService = async (phone: string, otp: string) => {
     throw new AppError('Invalid or expired OTP', 401);
   }
 
-  // Find or create user
   let user = await prisma.user.findUnique({ where: { phone } });
   let isNewUser = false;
 
@@ -36,114 +38,94 @@ export const verifyOtpService = async (phone: string, otp: string) => {
     });
   }
 
-  // Generate tokens
-  const tokenId = crypto.randomUUID();
   const accessToken = generateAccessToken(user.id);
-  const refreshToken = generateRefreshToken(user.id, tokenId);
 
-  // Calculate refresh token expiry
-  const refreshExpiryMs = parseDuration(env.JWT_REFRESH_EXPIRES_IN);
-  const expiresAt = new Date(Date.now() + refreshExpiryMs);
-
-  // Store refresh token
-  await prisma.refreshToken.create({
-    data: {
-      id: tokenId,
-      token: refreshToken,
-      userId: user.id,
-      expiresAt,
-    },
-  });
-
-  return {
-    user,
-    accessToken,
-    refreshToken,
-    isNewUser,
-  };
+  return { user, accessToken, isNewUser };
 };
 
-export const refreshTokenService = async (token: string) => {
+export const googleAuthService = async (idToken: string) => {
   let payload;
   try {
-    payload = verifyRefreshToken(token);
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
   } catch {
-    throw new AppError('Invalid refresh token', 401);
+    throw new AppError('Invalid Google ID token', 401);
   }
 
-  if (payload.type !== 'refresh') {
-    throw new AppError('Invalid token type', 401);
+  if (!payload || !payload.sub) {
+    throw new AppError('Invalid Google ID token', 401);
   }
 
-  // Find token in DB
-  const storedToken = await prisma.refreshToken.findUnique({
-    where: { id: payload.tokenId },
+  const { sub, email, email_verified, given_name, family_name, picture } = payload;
+
+  if (!email || !email_verified) {
+    throw new AppError('Google email not verified', 401);
+  }
+
+  const googleData = {
+    googleId: sub,
+    email,
+    firstName: given_name ?? null,
+    lastName: family_name ?? null,
+    avatarUrl: picture ?? null,
+  };
+
+  // 1. Existing Google account — refresh stored snapshot, return its user
+  const existingGoogleAccount = await prisma.googleAccount.findUnique({
+    where: { googleId: sub },
+    include: { user: true },
   });
 
-  if (!storedToken || storedToken.isRevoked || storedToken.expiresAt < new Date()) {
-    throw new AppError('Refresh token expired or revoked', 401);
+  if (existingGoogleAccount) {
+    await prisma.googleAccount.update({
+      where: { id: existingGoogleAccount.id },
+      data: {
+        email: googleData.email,
+        firstName: googleData.firstName,
+        lastName: googleData.lastName,
+        avatarUrl: googleData.avatarUrl,
+      },
+    });
+    const accessToken = generateAccessToken(existingGoogleAccount.user.id);
+    return { user: existingGoogleAccount.user, accessToken, isNewUser: false };
   }
 
-  // Revoke old token (rotation)
-  await prisma.refreshToken.update({
-    where: { id: storedToken.id },
-    data: { isRevoked: true },
-  });
+  // 2. Existing user by email (created via phone OTP) — link Google, backfill null fields only
+  let user: User | null = await prisma.user.findUnique({ where: { email } });
 
-  // Issue new token pair
-  const newTokenId = crypto.randomUUID();
-  const accessToken = generateAccessToken(payload.userId);
-  const refreshToken = generateRefreshToken(payload.userId, newTokenId);
+  if (user) {
+    await prisma.googleAccount.create({
+      data: { ...googleData, userId: user.id },
+    });
 
-  const refreshExpiryMs = parseDuration(env.JWT_REFRESH_EXPIRES_IN);
-  const expiresAt = new Date(Date.now() + refreshExpiryMs);
+    const backfill: Partial<{ firstName: string; lastName: string; avatarUrl: string }> = {};
+    if (!user.firstName && given_name) backfill.firstName = given_name;
+    if (!user.lastName && family_name) backfill.lastName = family_name;
+    if (!user.avatarUrl && picture) backfill.avatarUrl = picture;
 
-  await prisma.refreshToken.create({
+    if (Object.keys(backfill).length > 0) {
+      user = await prisma.user.update({ where: { id: user.id }, data: backfill });
+    }
+
+    const accessToken = generateAccessToken(user.id);
+    return { user, accessToken, isNewUser: false };
+  }
+
+  // 3. Brand new — create User seeded from Google data + GoogleAccount snapshot
+  user = await prisma.user.create({
     data: {
-      id: newTokenId,
-      token: refreshToken,
-      userId: payload.userId,
-      expiresAt,
+      email,
+      firstName: given_name ?? null,
+      lastName: family_name ?? null,
+      avatarUrl: picture ?? null,
+      role: 'GUEST',
+      googleAccount: { create: googleData },
     },
   });
 
-  return { accessToken, refreshToken };
-};
-
-export const logoutService = async (refreshToken: string) => {
-  // Revoke the refresh token
-  const token = await prisma.refreshToken.findUnique({
-    where: { token: refreshToken },
-  });
-
-  if (token && !token.isRevoked) {
-    await prisma.refreshToken.update({
-      where: { id: token.id },
-      data: { isRevoked: true },
-    });
-  }
-
-  return { message: 'Logged out successfully' };
-};
-
-// Helper: parse duration strings like "7d", "15m", "1h" to milliseconds
-const parseDuration = (duration: string): number => {
-  const match = duration.match(/^(\d+)([smhd])$/);
-  if (!match) return 7 * 24 * 60 * 60 * 1000; // default 7 days
-
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-
-  switch (unit) {
-    case 's':
-      return value * 1000;
-    case 'm':
-      return value * 60 * 1000;
-    case 'h':
-      return value * 60 * 60 * 1000;
-    case 'd':
-      return value * 24 * 60 * 60 * 1000;
-    default:
-      return 7 * 24 * 60 * 60 * 1000;
-  }
+  const accessToken = generateAccessToken(user.id);
+  return { user, accessToken, isNewUser: true };
 };
