@@ -12,6 +12,10 @@ const envSchema = z.object({
   ADMIN_APP_URL: z.string().default('http://localhost:3002'),
   OTP_EXPIRY_MINUTES: z.coerce.number().default(10),
   GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_MAPS_SERVER_KEY: z.string().optional(),
+  RAZORPAY_KEY_ID: z.string().min(1),
+  RAZORPAY_KEY_SECRET: z.string().min(1),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

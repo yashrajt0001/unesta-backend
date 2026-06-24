@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '../../common/types/index.js';
 import {
+  createPaymentOrderService,
+  verifyPaymentService,
+  handleWebhookService,
   getPaymentByIdService,
   getMyPaymentsService,
   getMyPayoutsService,
@@ -10,6 +13,22 @@ import {
   deletePayoutMethodService,
 } from './payments.service.js';
 import type { PaymentStatus, PayoutStatus } from '@prisma/client';
+
+export const createPaymentOrder = asyncHandler(async (req: Request, res: Response) => {
+  const order = await createPaymentOrderService(req.user!.userId, req.body.bookingId);
+  res.status(201).json({ success: true, message: 'Payment order created', data: order });
+});
+
+export const verifyPayment = asyncHandler(async (req: Request, res: Response) => {
+  const payment = await verifyPaymentService(req.user!.userId, req.body);
+  res.status(200).json({ success: true, message: 'Payment verified', data: payment });
+});
+
+export const razorpayWebhook = asyncHandler(async (req: Request, res: Response) => {
+  const signature = req.headers['x-razorpay-signature'] as string | undefined;
+  const result = await handleWebhookService(req.rawBody, signature);
+  res.status(200).json(result);
+});
 
 export const getPaymentById = asyncHandler(async (req: Request, res: Response) => {
   const payment = await getPaymentByIdService(req.params['id'] as string, req.user!.userId);

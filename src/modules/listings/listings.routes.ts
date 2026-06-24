@@ -13,6 +13,7 @@ import {
   deleteHouseRule,
   updateAvailability,
   getAvailability,
+  getUnavailableDates,
   getAllAmenities,
   addListingImage,
   deleteListingImage,
@@ -39,6 +40,7 @@ const router = Router();
 // ─── Public ────────────────────────────────────────────────────────────────────
 router.get('/amenities', getAllAmenities);
 router.get('/:id/availability', validate(getAvailabilitySchema), getAvailability);
+router.get('/:id/unavailable-dates', validate(getAvailabilitySchema), getUnavailableDates);
 router.get('/:id', optionalAuthenticateUser, validate(listingIdParamSchema), getListingById);
 
 // ─── Authenticated ─────────────────────────────────────────────────────────────

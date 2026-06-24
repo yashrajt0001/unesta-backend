@@ -1,6 +1,209 @@
+import crypto from 'crypto';
 import { prisma } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
-import type { PaymentStatus, PayoutStatus, PayoutMethod } from '@prisma/client';
+import { razorpay } from '../../common/config/razorpay.js';
+import { env } from '../../common/config/env.js';
+import { notifyBookingConfirmed } from '../notifications/notifications.service.js';
+import type {
+  PaymentStatus,
+  PayoutStatus,
+  PayoutMethod,
+  PaymentMethod,
+  BookingStatus,
+} from '@prisma/client';
+
+// ─── Razorpay Checkout Flow ─────────────────────────────────────────────────────
+
+function mapRazorpayMethod(method?: string): PaymentMethod {
+  switch (method) {
+    case 'card':
+      return 'CARD';
+    case 'netbanking':
+      return 'BANK';
+    case 'upi':
+      return 'UPI';
+    case 'wallet':
+      return 'WALLET';
+    default:
+      return 'CARD';
+  }
+}
+
+function signaturesMatch(expected: string, received: string): boolean {
+  return (
+    expected.length === received.length &&
+    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received))
+  );
+}
+
+// Idempotent: marks a payment COMPLETED, confirms its booking, notifies the guest.
+// Called from both the client-side verify endpoint and the Razorpay webhook.
+async function markPaymentCaptured(
+  payment: { id: string; bookingId: string; status: PaymentStatus },
+  gatewayPaymentId: string,
+  method?: string,
+): Promise<void> {
+  if (payment.status === 'COMPLETED') return;
+
+  await prisma.$transaction([
+    prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'COMPLETED',
+        gatewayTransactionId: gatewayPaymentId,
+        paymentMethod: mapRazorpayMethod(method),
+        paidAt: new Date(),
+      },
+    }),
+    // Only advance live bookings — never resurrect a cancelled/declined one.
+    prisma.booking.updateMany({
+      where: { id: payment.bookingId, status: { in: ['PENDING', 'CONFIRMED'] } },
+      data: { status: 'CONFIRMED' },
+    }),
+  ]);
+
+  const booking = await prisma.booking.findUnique({
+    where: { id: payment.bookingId },
+    select: { guestId: true, listing: { select: { title: true } } },
+  });
+  if (booking) await notifyBookingConfirmed(booking.guestId, booking.listing.title);
+}
+
+// Step 1: guest requests a Razorpay order for a booking. Frontend opens checkout with this.
+export const createPaymentOrderService = async (userId: string, bookingId: string) => {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: {
+      id: true,
+      guestId: true,
+      totalPrice: true,
+      currency: true,
+      status: true,
+      listing: { select: { title: true } },
+      payment: { select: { status: true } },
+    },
+  });
+
+  if (!booking) throw new AppError('Booking not found', 404);
+  if (booking.guestId !== userId) throw new AppError('Forbidden', 403);
+
+  const unpayable: BookingStatus[] = [
+    'CANCELLED_BY_GUEST',
+    'CANCELLED_BY_HOST',
+    'DECLINED',
+    'EXPIRED',
+    'COMPLETED',
+  ];
+  if (unpayable.includes(booking.status)) {
+    throw new AppError('This booking can no longer be paid for', 400);
+  }
+  if (booking.payment?.status === 'COMPLETED') {
+    throw new AppError('This booking is already paid', 400);
+  }
+
+  const amountInPaise = Math.round(booking.totalPrice * 100);
+
+  const order = await razorpay.orders.create({
+    amount: amountInPaise,
+    currency: booking.currency,
+    receipt: booking.id,
+    notes: { bookingId: booking.id },
+  });
+
+  await prisma.payment.upsert({
+    where: { bookingId: booking.id },
+    create: {
+      bookingId: booking.id,
+      payerId: userId,
+      amount: booking.totalPrice,
+      currency: booking.currency,
+      gatewayOrderId: order.id,
+      status: 'PENDING',
+    },
+    update: {
+      gatewayOrderId: order.id,
+      amount: booking.totalPrice,
+      status: 'PENDING',
+    },
+  });
+
+  return {
+    orderId: order.id,
+    amount: amountInPaise,
+    currency: booking.currency,
+    keyId: env.RAZORPAY_KEY_ID,
+    bookingId: booking.id,
+    listingTitle: booking.listing.title,
+  };
+};
+
+// Step 2: frontend posts the Razorpay handler response here to confirm payment.
+export const verifyPaymentService = async (
+  userId: string,
+  input: { razorpayOrderId: string; razorpayPaymentId: string; razorpaySignature: string },
+) => {
+  const expected = crypto
+    .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+    .update(`${input.razorpayOrderId}|${input.razorpayPaymentId}`)
+    .digest('hex');
+  if (!signaturesMatch(expected, input.razorpaySignature)) {
+    throw new AppError('Invalid payment signature', 400);
+  }
+
+  const payment = await prisma.payment.findUnique({
+    where: { gatewayOrderId: input.razorpayOrderId },
+    select: { id: true, bookingId: true, payerId: true, status: true },
+  });
+  if (!payment) throw new AppError('Payment not found', 404);
+  if (payment.payerId !== userId) throw new AppError('Forbidden', 403);
+
+  if (payment.status !== 'COMPLETED') {
+    const rp = await razorpay.payments.fetch(input.razorpayPaymentId);
+    const captured = rp.status === 'captured' || rp.status === 'authorized';
+    if (rp.order_id !== input.razorpayOrderId || !captured) {
+      throw new AppError('Payment not captured', 400);
+    }
+    await markPaymentCaptured(
+      payment,
+      rp.id,
+      typeof rp.method === 'string' ? rp.method : undefined,
+    );
+  }
+
+  return prisma.payment.findUnique({ where: { id: payment.id } });
+};
+
+// Server-to-server confirmation from Razorpay. The source of truth for capture/failure.
+export const handleWebhookService = async (rawBody: Buffer | undefined, signature?: string) => {
+  if (!env.RAZORPAY_WEBHOOK_SECRET) throw new AppError('Webhook not configured', 503);
+  if (!rawBody || !signature) throw new AppError('Invalid webhook request', 400);
+
+  const expected = crypto
+    .createHmac('sha256', env.RAZORPAY_WEBHOOK_SECRET)
+    .update(rawBody)
+    .digest('hex');
+  if (!signaturesMatch(expected, signature)) {
+    throw new AppError('Invalid webhook signature', 400);
+  }
+
+  const event = JSON.parse(rawBody.toString());
+  const entity = event?.payload?.payment?.entity;
+  if (!entity?.order_id) return { received: true };
+
+  const payment = await prisma.payment.findUnique({
+    where: { gatewayOrderId: entity.order_id },
+    select: { id: true, bookingId: true, status: true },
+  });
+  if (!payment) return { received: true };
+
+  if (event.event === 'payment.captured') {
+    await markPaymentCaptured(payment, entity.id, entity.method);
+  } else if (event.event === 'payment.failed' && payment.status !== 'COMPLETED') {
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED' } });
+  }
+
+  return { received: true };
+};
 
 // ─── Payment History ──────────────────────────────────────────────────────────
 

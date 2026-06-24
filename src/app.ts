@@ -8,6 +8,7 @@ import usersRoutes from './modules/users/users.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
 import listingsRoutes from './modules/listings/listings.routes.js';
 import searchRoutes from './modules/search/search.routes.js';
+import placesRoutes from './modules/places/places.routes.js';
 import bookingsRoutes from './modules/bookings/bookings.routes.js';
 import paymentsRoutes from './modules/payments/payments.routes.js';
 import messagesRoutes from './modules/messages/messages.routes.js';
@@ -32,8 +33,15 @@ app.use(
   }),
 );
 
-// Body parsing
-app.use(express.json({ limit: '10mb' }));
+// Body parsing — stash raw buffer so the Razorpay webhook can verify its HMAC signature
+app.use(
+  express.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request).rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 
 // Global rate limiter
@@ -54,6 +62,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/listings', listingsRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/places', placesRoutes);
 app.use('/api/bookings', bookingsRoutes);
 app.use('/api/host', hostRoutes);
 app.use('/api/notifications', notificationsRoutes);

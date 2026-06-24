@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+export const createOrderSchema = z.object({
+  body: z.object({
+    bookingId: z.string().uuid('Invalid booking ID'),
+  }),
+});
+
+export const verifyPaymentSchema = z.object({
+  body: z.object({
+    razorpayOrderId: z.string().min(1),
+    razorpayPaymentId: z.string().min(1),
+    razorpaySignature: z.string().min(1),
+  }),
+});
+
 export const getPaymentByIdSchema = z.object({
   params: z.object({
     id: z.string().uuid('Invalid payment ID'),

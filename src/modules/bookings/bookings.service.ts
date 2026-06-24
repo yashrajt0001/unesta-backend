@@ -1,4 +1,4 @@
-import { prisma } from '../../common/config/database.js';
+import { prisma, withDbRetry } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
 import type { BookingStatus } from '@prisma/client';
 
@@ -18,6 +18,7 @@ const bookingSelectFull = {
   basePricePerNight: true,
   cleaningFee: true,
   serviceFee: true,
+  hostServiceFee: true,
   totalPrice: true,
   hostPayout: true,
   currency: true,
@@ -126,7 +127,8 @@ export const createBookingService = async (guestId: string, input: CreateBooking
   }
 
   // Check date conflicts inside a transaction to prevent race conditions
-  return prisma.$transaction(async (tx) => {
+  return withDbRetry(() =>
+    prisma.$transaction(async (tx) => {
     // Re-check conflicts inside transaction
     const overlapping = await tx.booking.findFirst({
       where: {
@@ -149,7 +151,8 @@ export const createBookingService = async (guestId: string, input: CreateBooking
 
     const pricing = calculatePricing(listing.basePrice, listing.cleaningFee ?? 0, numNights);
     const bookingType = listing.instantBook ? 'INSTANT' : 'REQUEST';
-    const status = listing.instantBook ? 'CONFIRMED' : 'PENDING';
+    // Pay-first: every booking starts PENDING and is confirmed only once payment is captured.
+    const status = 'PENDING';
 
     const booking = await tx.booking.create({
       data: {
@@ -170,7 +173,8 @@ export const createBookingService = async (guestId: string, input: CreateBooking
     });
 
     return booking;
-  });
+    }, { maxWait: 10000, timeout: 20000 }),
+  );
 };
 
 // ─── Get Booking ──────────────────────────────────────────────────────────────

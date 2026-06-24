@@ -29,6 +29,33 @@ const retryQuery = async <T>(operation: () => Promise<T>): Promise<T> => {
   throw lastError;
 };
 
+// Retry an entire operation (e.g. an interactive transaction) on transient
+// connection errors. A per-query retry can't rescue an interactive transaction
+// whose connection dropped mid-flight, so the whole transaction is retried.
+export const withDbRetry = async <T>(op: () => Promise<T>, retries = 2): Promise<T> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await op();
+    } catch (error) {
+      const err = error as { code?: string; message?: string };
+      const transient =
+        err.code === 'P2028' ||
+        err.code === 'P1001' ||
+        err.code === 'P1017' ||
+        !!err.message?.includes('Connection closed') ||
+        !!err.message?.includes('closed transaction');
+      if (transient && attempt <= retries) {
+        logger.warn(
+          `Transient DB error (${err.code ?? 'unknown'}); retrying transaction (${attempt}/${retries})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
 // Create Prisma Client with extensions
 const createPrismaClient = () => {
   const basePrisma = new PrismaClient({
@@ -95,14 +122,10 @@ export const startConnectionKeepAlive = (): void => {
     try {
       await prisma.$queryRaw`SELECT 1`;
     } catch (_error) {
-      logger.error('Keep-alive ping failed');
-      try {
-        await prisma.$disconnect();
-        await prisma.$connect();
-        logger.info('Connection restored via keep-alive');
-      } catch (_reconnectError) {
-        logger.error('Keep-alive reconnection failed');
-      }
+      // Do NOT $disconnect here — that tears down any in-flight transaction and
+      // causes P2028 ("transaction ... obtained before disconnecting"). Prisma
+      // re-establishes the connection automatically on the next query.
+      logger.warn('Keep-alive ping failed; Prisma will reconnect on next query');
     }
   }, 30000);
 

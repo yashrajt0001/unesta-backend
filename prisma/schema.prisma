@@ -440,8 +440,9 @@ model Payment {
   payer                User           @relation(fields: [payerId], references: [id])
   amount               Float
   currency             String         @default("INR")
-  paymentMethod        PaymentMethod
+  paymentMethod        PaymentMethod  @default(CARD)
   paymentGateway       PaymentGateway @default(RAZORPAY)
+  gatewayOrderId       String?        @unique
   gatewayTransactionId String?        @unique
   status               PaymentStatus  @default(PENDING)
   paidAt               DateTime?

@@ -1,5 +1,5 @@
 import { ReviewType } from '@prisma/client';
-import { prisma } from '../../common/config/database.js';
+import { prisma, withDbRetry } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
 
 const REVIEW_WINDOW_DAYS = 14;
@@ -102,7 +102,8 @@ export const submitReviewService = async (
 
   const isPublic = !!otherReview;
 
-  const review = await prisma.$transaction(async (tx) => {
+  const review = await withDbRetry(() =>
+    prisma.$transaction(async (tx) => {
     const newReview = await tx.review.create({
       data: {
         bookingId: input.bookingId,
@@ -128,7 +129,8 @@ export const submitReviewService = async (
     }
 
     return newReview;
-  });
+    }, { maxWait: 10000, timeout: 20000 }),
+  );
 
   return review;
 };

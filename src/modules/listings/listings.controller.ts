@@ -11,6 +11,7 @@ import {
   deleteHouseRuleService,
   updateAvailabilityService,
   getAvailabilityService,
+  getUnavailableDatesService,
   getAllAmenitiesService,
   addListingImageService,
   deleteListingImageService,
@@ -80,6 +81,13 @@ export const getAvailability = asyncHandler(async (req: Request, res: Response) 
   const to = req.query['to'] as string;
   const availability = await getAvailabilityService(req.params['id'] as string, from, to);
   res.status(200).json({ success: true, message: 'Availability retrieved', data: availability });
+});
+
+export const getUnavailableDates = asyncHandler(async (req: Request, res: Response) => {
+  const from = req.query['from'] as string;
+  const to = req.query['to'] as string;
+  const dates = await getUnavailableDatesService(req.params['id'] as string, from, to);
+  res.status(200).json({ success: true, message: 'Unavailable dates retrieved', data: dates });
 });
 
 export const addListingImage = asyncHandler(async (req: Request, res: Response) => {

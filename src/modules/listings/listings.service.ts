@@ -318,6 +318,52 @@ export const getAvailabilityService = async (id: string, from: string, to: strin
   });
 };
 
+/**
+ * Guest-facing: all dates in [from, to] that cannot be booked — the union of
+ * host-blocked days (ListingAvailability.isAvailable = false) and days covered
+ * by active bookings. A booking blocks nights checkIn..checkOut-1; the checkout
+ * day stays bookable. Returns sorted ISO (YYYY-MM-DD) strings.
+ */
+export const getUnavailableDatesService = async (id: string, from: string, to: string) => {
+  const listing = await prisma.listing.findUnique({ where: { id }, select: { id: true } });
+  if (!listing) throw new AppError('Listing not found', 404);
+
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  const toIso = (d: Date) => d.toISOString().slice(0, 10);
+  const nextDay = (d: Date) => new Date(d.getTime() + 86_400_000);
+
+  const [blocked, bookings] = await Promise.all([
+    prisma.listingAvailability.findMany({
+      where: {
+        listingId: id,
+        isAvailable: false,
+        date: { gte: fromDate, lte: toDate },
+      },
+      select: { date: true },
+    }),
+    prisma.booking.findMany({
+      where: {
+        listingId: id,
+        status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] },
+        checkInDate: { lt: nextDay(toDate) },
+        checkOutDate: { gt: fromDate },
+      },
+      select: { checkInDate: true, checkOutDate: true },
+    }),
+  ]);
+
+  const dates = new Set<string>();
+  for (const b of blocked) dates.add(toIso(b.date));
+  for (const bk of bookings) {
+    for (let d = new Date(bk.checkInDate); d < bk.checkOutDate; d = nextDay(d)) {
+      if (d >= fromDate && d <= toDate) dates.add(toIso(d));
+    }
+  }
+
+  return [...dates].sort();
+};
+
 // ─── Images ───────────────────────────────────────────────────────────────────
 
 export const addListingImageService = async (
