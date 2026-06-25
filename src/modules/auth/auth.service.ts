@@ -44,6 +44,12 @@ export const verifyOtpService = async (phone: string, otp: string) => {
 };
 
 export const googleAuthService = async (idToken: string) => {
+  // Without a configured client id we can't enforce the audience check, so refuse
+  // rather than verify tokens that could be minted for any other Google app.
+  if (!env.GOOGLE_CLIENT_ID) {
+    throw new AppError('Google login is not configured', 503);
+  }
+
   let payload;
   try {
     const ticket = await googleClient.verifyIdToken({
