@@ -61,11 +61,11 @@ async function main() {
   console.log('All permissions assigned to super_admin role');
 
   // 4. Create admin moderator
-  const hashedPassword = await bcrypt.hash('admin123', 12);
+  const hashedPassword = await bcrypt.hash('Admin@123', 12);
 
   const adminModerator = await prisma.moderator.upsert({
     where: { email: 'admin@unesta.com' },
-    update: {},
+    update: { password: hashedPassword },
     create: {
       email: 'admin@unesta.com',
       password: hashedPassword,
