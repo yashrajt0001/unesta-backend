@@ -18,6 +18,7 @@ export const searchListings = asyncHandler(async (req: Request, res: Response) =
     sort: (req.query['sort'] as 'price_asc' | 'price_desc' | 'newest'),
     page: Number(req.query['page']),
     limit: Number(req.query['limit']),
+    userId: req.user?.userId,
   });
 
   res.status(200).json({

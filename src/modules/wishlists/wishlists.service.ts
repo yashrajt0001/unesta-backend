@@ -18,11 +18,13 @@ export const getWishlistsService = async (userId: string) => {
     include: {
       _count: { select: { items: true } },
       items: {
-        take: 1,
         orderBy: { createdAt: 'desc' },
         include: {
           listing: {
-            select: { id: true, title: true, images: { take: 1, select: { url: true }, orderBy: { sortOrder: 'asc' } } },
+            select: {
+              id: true, title: true, city: true, state: true, basePrice: true,
+              images: { take: 1, select: { url: true }, orderBy: { sortOrder: 'asc' } },
+            },
           },
         },
       },

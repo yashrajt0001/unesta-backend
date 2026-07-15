@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import { apiRateLimiter } from './common/middleware/rate-limiter.js';
 import { errorHandler, notFoundHandler } from './common/middleware/error-handler.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -22,6 +23,10 @@ const app = express();
 
 // Security
 app.use(helmet());
+
+// Gzip/deflate response bodies — shrinks JSON payloads over the wire (big win
+// for list endpoints and cross-region transfer). Cheap CPU, large bandwidth cut.
+app.use(compression());
 
 // CORS
 app.use(

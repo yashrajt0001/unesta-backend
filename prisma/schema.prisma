@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
@@ -41,6 +42,7 @@ model Permission {
   updatedAt   DateTime         @updatedAt
 
   roles RolePermission[]
+  
 }
 
 model ModeratorRole {
@@ -306,6 +308,11 @@ model Listing {
   @@index([status])
   @@index([propertyType])
   @@index([basePrice])
+  // Search always filters status=PUBLISHED then sorts by createdAt (newest) or
+  // basePrice. These composites let Postgres satisfy the filter + ORDER BY from
+  // a single index instead of scanning + sorting all published rows.
+  @@index([status, createdAt])
+  @@index([status, basePrice])
 }
 
 model ListingImage {

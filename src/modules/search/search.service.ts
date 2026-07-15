@@ -50,6 +50,7 @@ interface SearchListingsInput {
   sort: 'price_asc' | 'price_desc' | 'newest';
   page: number;
   limit: number;
+  userId?: string;
 }
 
 // ─── Search Listings ──────────────────────────────────────────────────────────
@@ -139,24 +140,46 @@ export const searchListingsService = async (input: SearchListingsInput) => {
       orderBy = { createdAt: 'desc' };
   }
 
-  const [listings, total] = await Promise.all([
-    prisma.listing.findMany({
-      where,
-      select: listingSelectPublic,
-      orderBy,
-      skip: (input.page - 1) * input.limit,
-      take: input.limit,
-    }),
-    prisma.listing.count({ where }),
-  ]);
+  // The DB is remote (us-east-1) and its pooler serializes queries — a parallel
+  // Promise.all does NOT overlap, so every round trip is additive (~1.4s each).
+  // So this path is built to make ONE round trip for anonymous search:
+  //  - relationLoadStrategy: 'join' folds host + cover image into the same query
+  //    instead of Prisma's default extra per-relation round trips.
+  //  - `take: limit + 1` yields a hasMore flag without a separate count() query.
+  const rows = await prisma.listing.findMany({
+    where,
+    select: listingSelectPublic,
+    orderBy,
+    skip: (input.page - 1) * input.limit,
+    take: input.limit + 1,
+    relationLoadStrategy: 'join',
+  });
+
+  const hasMore = rows.length > input.limit;
+  const listings = hasMore ? rows.slice(0, input.limit) : rows;
+
+  // Stamp isSaved per listing for the signed-in user. Scoped to just this
+  // page's listing IDs, so it's a single small query regardless of how many
+  // listings the user has saved overall. Only authed requests pay this extra
+  // round trip; anonymous search (the hot browse path) stays at one query.
+  let savedSet = new Set<string>();
+  if (input.userId && listings.length > 0) {
+    const saved = await prisma.wishlistItem.findMany({
+      where: {
+        listingId: { in: listings.map((l) => l.id) },
+        wishlist: { userId: input.userId },
+      },
+      select: { listingId: true },
+    });
+    savedSet = new Set(saved.map((s) => s.listingId));
+  }
 
   return {
-    listings,
+    listings: listings.map((l) => ({ ...l, isSaved: savedSet.has(l.id) })),
     pagination: {
       page: input.page,
       limit: input.limit,
-      total,
-      totalPages: Math.ceil(total / input.limit),
+      hasMore,
     },
   };
 };

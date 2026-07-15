@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticateUser, optionalAuthenticateUser } from '../../common/middleware/auth.middleware.js';
 import { uploadSingle } from '../../common/middleware/upload.middleware.js';
 import { validate } from '../../common/middleware/validate.js';
+import { cacheControl } from '../../common/middleware/cache-control.js';
 import {
   createListing,
   getListingById,
@@ -38,10 +39,12 @@ import {
 const router = Router();
 
 // ─── Public ────────────────────────────────────────────────────────────────────
-router.get('/amenities', getAllAmenities);
-router.get('/:id/availability', validate(getAvailabilitySchema), getAvailability);
-router.get('/:id/unavailable-dates', validate(getAvailabilitySchema), getUnavailableDates);
-router.get('/:id', optionalAuthenticateUser, validate(listingIdParamSchema), getListingById);
+// Amenities are a static reference list — cache hard.
+router.get('/amenities', cacheControl('public', 3600), getAllAmenities);
+router.get('/:id/availability', cacheControl('public', 60), validate(getAvailabilitySchema), getAvailability);
+router.get('/:id/unavailable-dates', cacheControl('public', 60), validate(getAvailabilitySchema), getUnavailableDates);
+// Detail body carries per-user `isSaved` → private, browser-only cache.
+router.get('/:id', cacheControl('private', 30), optionalAuthenticateUser, validate(listingIdParamSchema), getListingById);
 
 // ─── Authenticated ─────────────────────────────────────────────────────────────
 router.use(authenticateUser);

@@ -147,7 +147,16 @@ export const getListingByIdService = async (id: string, requesterId?: string) =>
     throw new AppError('Listing not found', 404);
   }
 
-  return listing;
+  let isSaved = false;
+  if (requesterId) {
+    const item = await prisma.wishlistItem.findFirst({
+      where: { listingId: id, wishlist: { userId: requesterId } },
+      select: { id: true },
+    });
+    isSaved = !!item;
+  }
+
+  return { ...listing, isSaved };
 };
 
 // ─── Host's listings ───────────────────────────────────────────────────────────
