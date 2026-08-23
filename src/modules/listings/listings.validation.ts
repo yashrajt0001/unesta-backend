@@ -34,7 +34,8 @@ export const createListingSchema = z.object({
     cancellationPolicy: cancellationPolicyEnum.optional(),
     instantBook: z.boolean().optional(),
     amenityIds: z.array(z.string().uuid()).optional(),
-    houseRules: z.array(z.object({ ruleText: z.string().min(1) })).optional(),
+    ruleTemplateIds: z.array(z.string().uuid()).optional(),
+    customRules: z.array(z.string().trim().min(1).max(200)).optional(),
   }),
 });
 
@@ -89,9 +90,15 @@ export const addHouseRulesSchema = z.object({
   params: z.object({
     id: z.string().uuid('Invalid listing ID'),
   }),
-  body: z.object({
-    rules: z.array(z.object({ ruleText: z.string().min(1, 'Rule text is required') })).min(1),
-  }),
+  body: z
+    .object({
+      ruleTemplateIds: z.array(z.string().uuid('Invalid rule template ID')).optional(),
+      customRules: z.array(z.string().trim().min(1, 'Rule text is required').max(200)).optional(),
+    })
+    .refine(
+      (b) => (b.ruleTemplateIds?.length ?? 0) + (b.customRules?.length ?? 0) > 0,
+      'Pick at least one rule or write your own',
+    ),
 });
 
 export const updateAvailabilitySchema = z.object({
@@ -121,6 +128,18 @@ export const deleteHouseRuleSchema = z.object({
   params: z.object({
     id: z.string().uuid('Invalid listing ID'),
     ruleId: z.string().uuid('Invalid rule ID'),
+  }),
+});
+
+// The key comes from POST /api/uploads/presign — the browser has already PUT the
+// bytes into R2 by the time this is called.
+export const addListingImageSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid listing ID'),
+  }),
+  body: z.object({
+    key: z.string().min(1, 'key is required'),
+    isCover: z.boolean().optional().default(false),
   }),
 });
 

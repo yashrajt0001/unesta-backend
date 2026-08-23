@@ -37,7 +37,7 @@ export const adminListingIdParamSchema = z.object({
 export const listBookingsAdminSchema = z.object({
   query: z.object({
     search: z.string().optional(),
-    status: z.enum(['PENDING', 'CONFIRMED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST', 'DECLINED', 'EXPIRED']).optional(),
+    status: z.enum(['PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST', 'DECLINED', 'EXPIRED']).optional(),
     page: z.coerce.number().int().positive().optional().default(1),
     limit: z.coerce.number().int().positive().max(100).optional().default(20),
   }),
@@ -118,5 +118,64 @@ export const adminListingDetailSchema = z.object({
 });
 
 export const adminBookingDetailSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+});
+
+// ─── Amenity Management ──────────────────────────────────────────────────────
+
+const amenityCategoryEnum = z.enum(['ESSENTIALS', 'FEATURES', 'SAFETY', 'LOCATION']);
+
+export const listAmenitiesAdminSchema = z.object({
+  query: z.object({
+    search: z.string().optional(),
+    category: amenityCategoryEnum.optional(),
+  }),
+});
+
+export const createAmenitySchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1, 'Name is required').max(60, 'Name must be 60 characters or less'),
+    icon: z.string().trim().max(60).optional(),
+    category: amenityCategoryEnum,
+    sortOrder: z.coerce.number().int().min(0).optional().default(0),
+  }),
+});
+
+export const updateAmenitySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    name: z.string().trim().min(1, 'Name is required').max(60, 'Name must be 60 characters or less').optional(),
+    icon: z.string().trim().max(60).nullable().optional(),
+    category: amenityCategoryEnum.optional(),
+    sortOrder: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const amenityIdParamSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+});
+
+export const listRuleTemplatesAdminSchema = z.object({
+  query: z.object({
+    search: z.string().optional(),
+  }),
+});
+
+export const createRuleTemplateSchema = z.object({
+  body: z.object({
+    text: z.string().trim().min(1, 'Rule text is required').max(200, 'Rule must be 200 characters or less'),
+    sortOrder: z.coerce.number().int().min(0).optional().default(0),
+  }),
+});
+
+export const updateRuleTemplateSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    text: z.string().trim().min(1, 'Rule text is required').max(200, 'Rule must be 200 characters or less').optional(),
+    sortOrder: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const ruleTemplateIdParamSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
 });

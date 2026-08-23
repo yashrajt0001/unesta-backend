@@ -25,6 +25,14 @@ import {
   getListingDetailService,
   getBookingDetailService,
   changePasswordService,
+  listAmenitiesAdminService,
+  createAmenityService,
+  updateAmenityService,
+  deleteAmenityService,
+  listRuleTemplatesAdminService,
+  createRuleTemplateService,
+  updateRuleTemplateService,
+  deleteRuleTemplateService,
 } from './admin.service.js';
 import { asyncHandler } from '../../common/types/index.js';
 
@@ -178,4 +186,50 @@ export const getListingDetail = asyncHandler(async (req: Request, res: Response)
 export const getBookingDetail = asyncHandler(async (req: Request, res: Response) => {
   const booking = await getBookingDetailService(req.params['id'] as string);
   res.status(200).json({ success: true, message: 'Booking details retrieved', data: booking });
+});
+
+// ─── Amenity Management ──────────────────────────────────────────────────────
+
+export const listAmenitiesAdmin = asyncHandler(async (req: Request, res: Response) => {
+  const { search, category } = req.query as Record<string, string>;
+  const amenities = await listAmenitiesAdminService(search, category as any);
+  res.status(200).json({ success: true, message: 'Amenities retrieved', data: amenities });
+});
+
+export const createAmenity = asyncHandler(async (req: Request, res: Response) => {
+  const amenity = await createAmenityService(req.body);
+  res.status(201).json({ success: true, message: 'Amenity created', data: amenity });
+});
+
+export const updateAmenity = asyncHandler(async (req: Request, res: Response) => {
+  const amenity = await updateAmenityService(req.params['id'] as string, req.body);
+  res.status(200).json({ success: true, message: 'Amenity updated', data: amenity });
+});
+
+export const deleteAmenity = asyncHandler(async (req: Request, res: Response) => {
+  await deleteAmenityService(req.params['id'] as string);
+  res.status(200).json({ success: true, message: 'Amenity deleted' });
+});
+
+// ─── Rule Template Management ────────────────────────────────────────────────
+
+export const listRuleTemplatesAdmin = asyncHandler(async (req: Request, res: Response) => {
+  const { search } = req.query as Record<string, string>;
+  const templates = await listRuleTemplatesAdminService(search);
+  res.status(200).json({ success: true, message: 'Rule templates retrieved', data: templates });
+});
+
+export const createRuleTemplate = asyncHandler(async (req: Request, res: Response) => {
+  const template = await createRuleTemplateService(req.body);
+  res.status(201).json({ success: true, message: 'Rule created', data: template });
+});
+
+export const updateRuleTemplate = asyncHandler(async (req: Request, res: Response) => {
+  const template = await updateRuleTemplateService(req.params['id'] as string, req.body);
+  res.status(200).json({ success: true, message: 'Rule updated', data: template });
+});
+
+export const deleteRuleTemplate = asyncHandler(async (req: Request, res: Response) => {
+  await deleteRuleTemplateService(req.params['id'] as string);
+  res.status(200).json({ success: true, message: 'Rule deleted' });
 });

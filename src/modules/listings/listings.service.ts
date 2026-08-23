@@ -1,5 +1,11 @@
 import { prisma } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
+import {
+  assertObjectExists,
+  deleteObjectsByUrl,
+  isOwnedKey,
+  publicUrl,
+} from '../../common/utils/storage.js';
 import type { CancellationPolicy, ListingStatus, PropertyType, RoomType } from '@prisma/client';
 
 const listingSelectPublic = {
@@ -52,6 +58,7 @@ const listingSelectFull = {
     select: { id: true, url: true, sortOrder: true, isCover: true },
   },
   amenities: {
+    orderBy: { amenity: { sortOrder: 'asc' } },
     select: {
       amenity: {
         select: { id: true, name: true, icon: true, category: true },
@@ -59,7 +66,7 @@ const listingSelectFull = {
     },
   },
   houseRules: {
-    select: { id: true, ruleText: true },
+    select: { id: true, ruleText: true, isCustom: true },
   },
 } as const;
 
@@ -90,23 +97,33 @@ interface CreateListingInput {
   cancellationPolicy?: CancellationPolicy;
   instantBook?: boolean;
   amenityIds?: string[];
-  houseRules?: { ruleText: string }[];
+  ruleTemplateIds?: string[];
+  customRules?: string[];
 }
 
-type UpdateListingInput = Partial<Omit<CreateListingInput, 'amenityIds' | 'houseRules'>> & {
+interface RuleInput {
+  ruleTemplateIds?: string[];
+  customRules?: string[];
+}
+
+type UpdateListingInput = Partial<
+  Omit<CreateListingInput, 'amenityIds' | 'ruleTemplateIds' | 'customRules'>
+> & {
   amenityIds?: string[];
 };
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
 export const createListingService = async (hostId: string, input: CreateListingInput) => {
-  const { amenityIds, houseRules, ...listingData } = input;
+  const { amenityIds, ruleTemplateIds, customRules, ...listingData } = input;
 
   const user = await prisma.user.findUnique({ where: { id: hostId } });
   if (!user) throw new AppError('User not found', 404);
   if (user.role === 'GUEST') {
     await prisma.user.update({ where: { id: hostId }, data: { role: 'HOST' } });
   }
+
+  const ruleRows = await buildRuleRows({ ruleTemplateIds, customRules });
 
   const listing = await prisma.listing.create({
     data: {
@@ -118,10 +135,8 @@ export const createListingService = async (hostId: string, input: CreateListingI
           create: amenityIds.map((amenityId) => ({ amenityId })),
         },
       }),
-      ...(houseRules?.length && {
-        houseRules: {
-          create: houseRules.map((rule) => ({ ruleText: rule.ruleText })),
-        },
+      ...(ruleRows.length && {
+        houseRules: { create: ruleRows },
       }),
     },
     select: listingSelectFull,
@@ -245,44 +260,90 @@ export const deleteListingService = async (id: string, hostId: string) => {
   if (existing.hostId !== hostId) throw new AppError('Forbidden', 403);
 
   const activeBooking = await prisma.booking.findFirst({
-    where: { listingId: id, status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] } },
+    where: { listingId: id, status: { in: ['PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN'] } },
   });
   if (activeBooking) throw new AppError('Cannot delete a listing with active bookings', 409);
 
+  // Read the image URLs before the cascade removes the rows, so the objects can
+  // be cleared out of R2 too.
+  const images = await prisma.listingImage.findMany({
+    where: { listingId: id },
+    select: { url: true },
+  });
+
   await prisma.listing.delete({ where: { id } });
+  await deleteObjectsByUrl(images.map((image) => image.url));
+
   return { message: 'Listing deleted successfully' };
 };
 
 // ─── House rules ───────────────────────────────────────────────────────────────
 
-export const addHouseRulesService = async (
-  id: string,
-  hostId: string,
-  rules: { ruleText: string }[],
-) => {
-  const existing = await prisma.listing.findUnique({ where: { id } });
+export const getAllRuleTemplatesService = async () =>
+  prisma.ruleTemplate.findMany({
+    orderBy: { sortOrder: 'asc' },
+    select: { id: true, text: true },
+  });
+
+// Turns the two ways a host can add a rule — picking an admin template or typing
+// their own — into HouseRule rows. Template text is copied, not referenced.
+const buildRuleRows = async (input: RuleInput) => {
+  const rows: { ruleText: string; isCustom: boolean }[] = [];
+
+  if (input.ruleTemplateIds?.length) {
+    const templates = await prisma.ruleTemplate.findMany({
+      where: { id: { in: input.ruleTemplateIds } },
+      select: { text: true },
+    });
+    if (templates.length !== input.ruleTemplateIds.length) {
+      throw new AppError('One or more rule templates not found', 404);
+    }
+    rows.push(...templates.map((t) => ({ ruleText: t.text, isCustom: false })));
+  }
+
+  for (const text of input.customRules ?? []) {
+    rows.push({ ruleText: text.trim(), isCustom: true });
+  }
+
+  return rows;
+};
+
+export const addHouseRulesService = async (id: string, hostId: string, input: RuleInput) => {
+  // Hosts tap this one chip at a time, so the three reads run concurrently
+  // instead of one after the other — the wait is the slowest, not the sum.
+  const [existing, rows, current] = await Promise.all([
+    prisma.listing.findUnique({ where: { id }, select: { hostId: true } }),
+    buildRuleRows(input),
+    prisma.houseRule.findMany({ where: { listingId: id }, select: { ruleText: true } }),
+  ]);
+
   if (!existing) throw new AppError('Listing not found', 404);
   if (existing.hostId !== hostId) throw new AppError('Forbidden', 403);
 
-  await prisma.houseRule.createMany({
-    data: rules.map((rule) => ({ listingId: id, ruleText: rule.ruleText })),
-  });
+  // Skip rules the listing already has — hosts re-submit the whole selection.
+  const currentTexts = new Set(current.map((r) => r.ruleText));
+  const newRows = rows.filter((r) => !currentTexts.has(r.ruleText));
+
+  if (newRows.length) {
+    await prisma.houseRule.createMany({
+      data: newRows.map((r) => ({ listingId: id, ...r })),
+    });
+  }
 
   return prisma.houseRule.findMany({
     where: { listingId: id },
-    select: { id: true, ruleText: true },
+    select: { id: true, ruleText: true, isCustom: true },
   });
 };
 
 export const deleteHouseRuleService = async (listingId: string, ruleId: string, hostId: string) => {
-  const listing = await prisma.listing.findUnique({ where: { id: listingId } });
-  if (!listing) throw new AppError('Listing not found', 404);
-  if (listing.hostId !== hostId) throw new AppError('Forbidden', 403);
+  // Ownership is part of the filter, so this is one round trip instead of three.
+  // A rule on someone else's listing reads as "not found" rather than 403.
+  const { count } = await prisma.houseRule.deleteMany({
+    where: { id: ruleId, listingId, listing: { hostId } },
+  });
 
-  const rule = await prisma.houseRule.findUnique({ where: { id: ruleId } });
-  if (!rule || rule.listingId !== listingId) throw new AppError('Rule not found', 404);
-
-  await prisma.houseRule.delete({ where: { id: ruleId } });
+  if (count === 0) throw new AppError('Rule not found', 404);
   return { message: 'Rule deleted successfully' };
 };
 
@@ -354,7 +415,7 @@ export const getUnavailableDatesService = async (id: string, from: string, to: s
     prisma.booking.findMany({
       where: {
         listingId: id,
-        status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] },
+        status: { in: ['PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN'] },
         checkInDate: { lt: nextDay(toDate) },
         checkOutDate: { gt: fromDate },
       },
@@ -378,12 +439,17 @@ export const getUnavailableDatesService = async (id: string, from: string, to: s
 export const addListingImageService = async (
   listingId: string,
   hostId: string,
-  url: string,
+  key: string,
   isCover?: boolean,
 ) => {
   const listing = await prisma.listing.findUnique({ where: { id: listingId } });
   if (!listing) throw new AppError('Listing not found', 404);
   if (listing.hostId !== hostId) throw new AppError('Forbidden', 403);
+
+  // The key must be one we signed for this host, and the object must actually be
+  // in the bucket — otherwise the row would point at nothing.
+  if (!isOwnedKey(key, 'listings', hostId)) throw new AppError('Invalid upload key', 400);
+  await assertObjectExists(key);
 
   // Get the next sort order
   const maxSort = await prisma.listingImage.aggregate({
@@ -407,7 +473,7 @@ export const addListingImageService = async (
   const image = await prisma.listingImage.create({
     data: {
       listingId,
-      url,
+      url: publicUrl(key),
       sortOrder,
       isCover: shouldBeCover,
     },
@@ -431,6 +497,7 @@ export const deleteListingImageService = async (
   if (!image) throw new AppError('Image not found', 404);
 
   await prisma.listingImage.delete({ where: { id: imageId } });
+  await deleteObjectsByUrl([image.url]);
 
   // If deleted image was cover, make the first remaining image the cover
   if (image.isCover) {
@@ -533,7 +600,7 @@ export const reorderImagesService = async (
 
 export const getAllAmenitiesService = async () => {
   return prisma.amenity.findMany({
-    orderBy: { category: 'asc' },
+    orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     select: { id: true, name: true, icon: true, category: true },
   });
 };

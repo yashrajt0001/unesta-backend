@@ -20,7 +20,41 @@ model Moderator {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  roles ModeratorRole[]
+  roles           ModeratorRole[]
+  auditLogs       AuditLog[]
+  reportsResolved Report[]        @relation("ReportsResolved")
+}
+
+// What a moderator did, and to what. Written from the admin controllers on every
+// state change so there is a trail when two people share the console.
+model AuditLog {
+  id             String          @id @default(uuid())
+  // Nulled rather than cascaded when a moderator is deleted — the trail has to
+  // outlive the account, which is why the email is denormalised alongside it.
+  moderatorId    String?
+  moderator      Moderator?      @relation(fields: [moderatorId], references: [id], onDelete: SetNull)
+  moderatorEmail String
+  action         String
+  targetType     AuditTargetType
+  targetId       String
+  summary        String
+  createdAt      DateTime        @default(now())
+
+  @@index([createdAt])
+  @@index([moderatorId])
+  @@index([targetType, targetId])
+}
+
+enum AuditTargetType {
+  USER
+  LISTING
+  BOOKING
+  REVIEW
+  REPORT
+  MODERATOR
+  AMENITY
+  RULE_TEMPLATE
+  PAYOUT
 }
 
 model Role {
@@ -123,6 +157,7 @@ enum AmenityCategory {
 
 enum BookingStatus {
   PENDING
+  AWAITING_HOST
   CONFIRMED
   CHECKED_IN
   COMPLETED
@@ -243,7 +278,6 @@ model User {
   notifications        Notification[]
   reportsCreated       Report[]       @relation("ReportsCreated")
   reportsReceived      Report[]       @relation("ReportsReceived")
-  reportsResolved      Report[]       @relation("ReportsResolved")
 }
 
 model Otp {
@@ -356,6 +390,15 @@ model HouseRule {
   sortOrder Int     @default(0)
 
   @@index([listingId])
+}
+
+// Admin-managed catalogue of ready-made rules a host can pick from.
+// A picked rule is copied into HouseRule (isCustom = false), so editing or
+// deleting a template never rewrites rules already on live listings.
+model RuleTemplate {
+  id        String @id @default(uuid())
+  text      String @unique
+  sortOrder Int    @default(0)
 }
 
 model ListingAvailability {
@@ -620,7 +663,7 @@ model Report {
   adminNotes        String?
   resolvedAt        DateTime?
   resolvedById      String?
-  resolvedBy        User?        @relation("ReportsResolved", fields: [resolvedById], references: [id])
+  resolvedBy        Moderator?   @relation("ReportsResolved", fields: [resolvedById], references: [id])
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 

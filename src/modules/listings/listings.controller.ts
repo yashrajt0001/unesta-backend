@@ -13,14 +13,13 @@ import {
   getAvailabilityService,
   getUnavailableDatesService,
   getAllAmenitiesService,
+  getAllRuleTemplatesService,
   addListingImageService,
   deleteListingImageService,
   setCoverImageService,
   reorderImagesService,
 } from './listings.service.js';
 import { asyncHandler } from '../../common/types/index.js';
-import { uploadToCloudinary } from '../../common/utils/upload.js';
-import { AppError } from '../../common/middleware/error-handler.js';
 import type { ListingStatus } from '@prisma/client';
 
 export const createListing = asyncHandler(async (req: Request, res: Response) => {
@@ -58,7 +57,7 @@ export const deleteListing = asyncHandler(async (req: Request, res: Response) =>
 });
 
 export const addHouseRules = asyncHandler(async (req: Request, res: Response) => {
-  const rules = await addHouseRulesService(req.params['id'] as string, req.user!.userId, req.body.rules);
+  const rules = await addHouseRulesService(req.params['id'] as string, req.user!.userId, req.body);
   res.status(200).json({ success: true, message: 'House rules updated', data: rules });
 });
 
@@ -91,11 +90,13 @@ export const getUnavailableDates = asyncHandler(async (req: Request, res: Respon
 });
 
 export const addListingImage = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) throw new AppError('Image file is required', 400);
-  const url = await uploadToCloudinary(req.file.buffer, 'listings');
-  const isCover = req.body.isCover === 'true';
-  const image = await addListingImageService(req.params['id'] as string, req.user!.userId, url, isCover);
-  res.status(201).json({ success: true, message: 'Image uploaded', data: image });
+  const image = await addListingImageService(
+    req.params['id'] as string,
+    req.user!.userId,
+    req.body.key,
+    req.body.isCover,
+  );
+  res.status(201).json({ success: true, message: 'Image added', data: image });
 });
 
 export const deleteListingImage = asyncHandler(async (req: Request, res: Response) => {
@@ -135,4 +136,9 @@ export const reorderImages = asyncHandler(async (req: Request, res: Response) =>
 export const getAllAmenities = asyncHandler(async (_req: Request, res: Response) => {
   const amenities = await getAllAmenitiesService();
   res.status(200).json({ success: true, message: 'Amenities retrieved', data: amenities });
+});
+
+export const getAllRuleTemplates = asyncHandler(async (_req: Request, res: Response) => {
+  const templates = await getAllRuleTemplatesService();
+  res.status(200).json({ success: true, message: 'Rule templates retrieved', data: templates });
 });

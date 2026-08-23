@@ -1,12 +1,14 @@
 import { env } from './common/config/env.js';
 import { logger } from './common/utils/logger.js';
 import { connectDatabase, disconnectDatabase, startConnectionKeepAlive, stopConnectionKeepAlive } from './common/config/database.js';
+import { startBookingExpiryJob, stopBookingExpiryJob } from './common/jobs/booking-expiry.job.js';
 import app from './app.js';
 
 const startServer = async () => {
   // Connect to database
   await connectDatabase();
   startConnectionKeepAlive();
+  startBookingExpiryJob();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Server running on port ${env.PORT} in ${env.NODE_ENV} mode`);
@@ -16,6 +18,7 @@ const startServer = async () => {
   const gracefulShutdown = async (signal: string) => {
     logger.info(`${signal} received. Starting graceful shutdown...`);
     stopConnectionKeepAlive();
+    stopBookingExpiryJob();
 
     server.close(async () => {
       await disconnectDatabase();

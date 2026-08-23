@@ -3,7 +3,11 @@ import { prisma } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
 import { razorpay } from '../../common/config/razorpay.js';
 import { env } from '../../common/config/env.js';
-import { notifyBookingConfirmed } from '../notifications/notifications.service.js';
+import {
+  notifyBookingConfirmed,
+  notifyBookingRequest,
+  notifyBookingAwaitingHost,
+} from '../notifications/notifications.service.js';
 import type {
   PaymentStatus,
   PayoutStatus,
@@ -13,6 +17,10 @@ import type {
 } from '@prisma/client';
 
 // ─── Razorpay Checkout Flow ─────────────────────────────────────────────────────
+
+// Minutes a host gets to confirm a paid request-to-book booking before it auto-expires
+// and the guest is refunded in full. Instant-book listings skip this window entirely.
+export const HOST_RESPONSE_WINDOW_MINUTES = 30;
 
 function mapRazorpayMethod(method?: string): PaymentMethod {
   switch (method) {
@@ -36,7 +44,10 @@ function signaturesMatch(expected: string, received: string): boolean {
   );
 }
 
-// Idempotent: marks a payment COMPLETED, confirms its booking, notifies the guest.
+// Idempotent: marks a payment COMPLETED and advances its booking.
+// Instant-book bookings go straight to CONFIRMED. Request-to-book bookings go to
+// AWAITING_HOST with a response deadline — the host confirms before it, or the
+// expiry job refunds the guest in full.
 // Called from both the client-side verify endpoint and the Razorpay webhook.
 async function markPaymentCaptured(
   payment: { id: string; bookingId: string; status: PaymentStatus },
@@ -44,6 +55,24 @@ async function markPaymentCaptured(
   method?: string,
 ): Promise<void> {
   if (payment.status === 'COMPLETED') return;
+
+  const booking = await prisma.booking.findUnique({
+    where: { id: payment.bookingId },
+    select: {
+      status: true,
+      bookingType: true,
+      guestId: true,
+      hostId: true,
+      guest: { select: { firstName: true } },
+      listing: { select: { title: true } },
+    },
+  });
+
+  const isInstant = booking?.bookingType === 'INSTANT';
+  const nextStatus: BookingStatus = isInstant ? 'CONFIRMED' : 'AWAITING_HOST';
+  const hostResponseDeadline = isInstant
+    ? null
+    : new Date(Date.now() + HOST_RESPONSE_WINDOW_MINUTES * 60 * 1000);
 
   await prisma.$transaction([
     prisma.payment.update({
@@ -55,19 +84,55 @@ async function markPaymentCaptured(
         paidAt: new Date(),
       },
     }),
-    // Only advance live bookings — never resurrect a cancelled/declined one.
+    // Only advance an unpaid booking — never resurrect a cancelled/declined one,
+    // and never reset the deadline on a booking already past this step.
     prisma.booking.updateMany({
-      where: { id: payment.bookingId, status: { in: ['PENDING', 'CONFIRMED'] } },
-      data: { status: 'CONFIRMED' },
+      where: { id: payment.bookingId, status: 'PENDING' },
+      data: { status: nextStatus, hostResponseDeadline },
     }),
   ]);
 
-  const booking = await prisma.booking.findUnique({
-    where: { id: payment.bookingId },
-    select: { guestId: true, listing: { select: { title: true } } },
-  });
-  if (booking) await notifyBookingConfirmed(booking.guestId, booking.listing.title);
+  // Notify only on the first capture — a replayed webhook finds a non-PENDING booking.
+  if (!booking || booking.status !== 'PENDING') return;
+
+  if (isInstant) {
+    await notifyBookingConfirmed(booking.guestId, booking.listing.title);
+  } else {
+    await notifyBookingRequest(booking.hostId, booking.listing.title, booking.guest.firstName ?? 'A guest');
+    await notifyBookingAwaitingHost(
+      booking.guestId,
+      booking.listing.title,
+      HOST_RESPONSE_WINDOW_MINUTES,
+    );
+  }
 }
+
+// Full refund of a captured booking payment. Returns the refunded amount, or null if
+// there was nothing to refund (unpaid or already refunded booking).
+export const refundBookingPaymentService = async (
+  bookingId: string,
+  reason: string,
+): Promise<number | null> => {
+  const payment = await prisma.payment.findUnique({
+    where: { bookingId },
+    select: { id: true, status: true, amount: true, gatewayTransactionId: true },
+  });
+
+  if (!payment || payment.status !== 'COMPLETED' || !payment.gatewayTransactionId) return null;
+
+  await razorpay.payments.refund(payment.gatewayTransactionId, {
+    amount: Math.round(payment.amount * 100),
+    speed: 'normal',
+    notes: { bookingId, reason },
+  });
+
+  await prisma.payment.update({
+    where: { id: payment.id },
+    data: { status: 'REFUNDED' },
+  });
+
+  return payment.amount;
+};
 
 // Step 1: guest requests a Razorpay order for a booking. Frontend opens checkout with this.
 export const createPaymentOrderService = async (userId: string, bookingId: string) => {

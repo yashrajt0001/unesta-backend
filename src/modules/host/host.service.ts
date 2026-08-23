@@ -33,8 +33,8 @@ export const getHostOverviewService = async (hostId: string) => {
       take: 5,
     }),
 
-    // Pending booking requests
-    prisma.booking.count({ where: { hostId, status: 'PENDING' } }),
+    // Paid booking requests waiting on the host to confirm
+    prisma.booking.count({ where: { hostId, status: 'AWAITING_HOST' } }),
 
     // Unread messages across all conversations
     prisma.message.count({

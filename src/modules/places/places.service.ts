@@ -23,11 +23,27 @@ interface GooglePrediction {
   };
 }
 
-export const autocompleteService = async (input: string, sessionToken?: string) => {
+// How far around the user we ask Google to prefer results. It is a bias, not a
+// filter — places outside the circle still come back, just ranked lower.
+const BIAS_RADIUS_METRES = 50_000;
+
+export const autocompleteService = async (
+  input: string,
+  sessionToken?: string,
+  origin?: { lat: number; lng: number },
+) => {
   const key = requireKey();
 
   const body: Record<string, unknown> = { input };
   if (sessionToken) body['sessionToken'] = sessionToken;
+  if (origin) {
+    body['locationBias'] = {
+      circle: {
+        center: { latitude: origin.lat, longitude: origin.lng },
+        radius: BIAS_RADIUS_METRES,
+      },
+    };
+  }
 
   const res = await fetch(AUTOCOMPLETE_URL, {
     method: 'POST',
@@ -73,6 +89,35 @@ interface GoogleDetails {
   formattedAddress?: string;
 }
 
+// Shared by place details and reverse geocode — both end up with the same
+// component list, only the field names Google uses for it differ.
+const toAddress = (
+  components: GoogleAddressComponent[],
+  formattedAddress: string,
+  latitude: number | null,
+  longitude: number | null,
+) => {
+  const get = (type: string) => components.find((c) => c.types?.includes(type))?.longText;
+
+  const addressLine1 = [get('street_number'), get('route')].filter(Boolean).join(' ');
+
+  return {
+    addressLine1: addressLine1 || formattedAddress.split(',')[0] || '',
+    city:
+      get('locality') ||
+      get('postal_town') ||
+      get('sublocality') ||
+      get('administrative_area_level_2') ||
+      '',
+    state: get('administrative_area_level_1') || '',
+    country: get('country') || '',
+    postalCode: get('postal_code') || '',
+    latitude,
+    longitude,
+    formattedAddress,
+  };
+};
+
 export const placeDetailsService = async (placeId: string, sessionToken?: string) => {
   const key = requireKey();
 
@@ -92,25 +137,52 @@ export const placeDetailsService = async (placeId: string, sessionToken?: string
   }
 
   const json = (await res.json()) as GoogleDetails;
-  const components = json.addressComponents ?? [];
-  const get = (type: string) =>
-    components.find((c) => c.types?.includes(type))?.longText;
 
-  const addressLine1 = [get('street_number'), get('route')].filter(Boolean).join(' ');
+  return toAddress(
+    json.addressComponents ?? [],
+    json.formattedAddress ?? '',
+    json.location?.latitude ?? null,
+    json.location?.longitude ?? null,
+  );
+};
 
-  return {
-    addressLine1: addressLine1 || json.formattedAddress?.split(',')[0] || '',
-    city:
-      get('locality') ||
-      get('postal_town') ||
-      get('sublocality') ||
-      get('administrative_area_level_2') ||
-      '',
-    state: get('administrative_area_level_1') || '',
-    country: get('country') || '',
-    postalCode: get('postal_code') || '',
-    latitude: json.location?.latitude ?? null,
-    longitude: json.location?.longitude ?? null,
-    formattedAddress: json.formattedAddress ?? '',
-  };
+// ─── Reverse geocode ───────────────────────────────────────────────────────────
+
+const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
+
+interface LegacyGeocodeResult {
+  address_components?: { long_name?: string; types?: string[] }[];
+  formatted_address?: string;
+}
+
+// Dropping the pin on the map has no place ID, so this goes through the
+// Geocoding API instead of Places. Same output shape as placeDetailsService.
+export const reverseGeocodeService = async (lat: number, lng: number) => {
+  const key = requireKey();
+
+  const url = new URL(GEOCODE_URL);
+  url.searchParams.set('latlng', `${lat},${lng}`);
+  url.searchParams.set('key', key);
+
+  const res = await fetch(url.toString());
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new AppError(`Reverse geocode failed: ${detail.slice(0, 200)}`, 502);
+  }
+
+  const json = (await res.json()) as { status?: string; results?: LegacyGeocodeResult[] };
+
+  // ZERO_RESULTS is normal out at sea or in unmapped areas — the pin still stands.
+  if (json.status !== 'OK' || !json.results?.length) {
+    return toAddress([], '', lat, lng);
+  }
+
+  const first = json.results[0]!;
+  const components = (first.address_components ?? []).map((c) => ({
+    longText: c.long_name,
+    types: c.types,
+  }));
+
+  return toAddress(components, first.formatted_address ?? '', lat, lng);
 };

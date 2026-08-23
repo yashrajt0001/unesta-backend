@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { Prisma } from '@prisma/client';
+import { Prisma, AmenityCategory } from '@prisma/client';
 import { prisma } from '../../common/config/database.js';
 import { generateAdminAccessToken } from '../../common/utils/jwt.js';
 import { AppError } from '../../common/middleware/error-handler.js';
@@ -50,34 +50,169 @@ export const adminLoginService = async (email: string, password: string) => {
 
 // ─── Dashboard Stats ──────────────────────────────────────────────────────────
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Percentage change, rounded to one decimal. No previous activity reads as +100%. */
+const percentChange = (current: number, previous: number): number => {
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return Number((((current - previous) / previous) * 100).toFixed(1));
+};
+
+/** groupBy rows to a plain { STATUS: count } object, with every key present. */
+const countByStatus = <T extends string>(
+  rows: { status: T; _count: { _all: number } }[],
+  allStatuses: readonly T[],
+): Record<T, number> => {
+  const result = Object.fromEntries(allStatuses.map((s) => [s, 0])) as Record<T, number>;
+  rows.forEach((row) => {
+    result[row.status] = row._count._all;
+  });
+  return result;
+};
+
+const BOOKING_STATUSES = [
+  'PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN', 'COMPLETED',
+  'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST', 'DECLINED', 'EXPIRED',
+] as const;
+
+const LISTING_STATUSES = ['DRAFT', 'PUBLISHED', 'UNLISTED', 'SUSPENDED'] as const;
+
 export const getAdminStatsService = async () => {
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const windowStart = new Date(now.getTime() - 30 * DAY_MS);
+  const previousWindowStart = new Date(now.getTime() - 60 * DAY_MS);
+
+  const previousWindow = { gte: previousWindowStart, lt: windowStart };
 
   const [
-    totalUsers,
-    totalListings,
-    totalBookings,
-    monthlyBookings,
-    revenue,
+    usersByRole,
+    suspendedUsers,
+    listingRows,
+    bookingRows,
+    grossRevenue,
+    completedPayouts,
+    pendingPayouts,
+    openReports,
+    hiddenReviews,
+    usersCurrent,
+    usersPrevious,
+    bookingsCurrent,
+    bookingsPrevious,
+    revenueCurrent,
+    revenuePrevious,
   ] = await Promise.all([
-    prisma.user.count(),
-    prisma.listing.count({ where: { status: 'PUBLISHED' } }),
-    prisma.booking.count(),
-    prisma.booking.count({ where: { createdAt: { gte: monthStart } } }),
-    prisma.booking.aggregate({
-      where: { status: { in: ['CONFIRMED', 'COMPLETED'] } },
-      _sum: { hostPayout: true },
+    prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
+    prisma.user.count({ where: { isSuspended: true } }),
+    prisma.listing.groupBy({ by: ['status'], _count: { _all: true } }),
+    prisma.booking.groupBy({ by: ['status'], _count: { _all: true } }),
+    prisma.payment.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount: true } }),
+    prisma.payout.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount: true } }),
+    prisma.payout.aggregate({
+      where: { status: { in: ['PENDING', 'PROCESSING'] } },
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    prisma.report.count({ where: { status: { in: ['OPEN', 'UNDER_REVIEW'] } } }),
+    prisma.review.count({ where: { isPublic: false } }),
+    prisma.user.count({ where: { createdAt: { gte: windowStart } } }),
+    prisma.user.count({ where: { createdAt: previousWindow } }),
+    prisma.booking.count({ where: { createdAt: { gte: windowStart } } }),
+    prisma.booking.count({ where: { createdAt: previousWindow } }),
+    prisma.payment.aggregate({
+      where: { status: 'COMPLETED', paidAt: { gte: windowStart } },
+      _sum: { amount: true },
+    }),
+    prisma.payment.aggregate({
+      where: { status: 'COMPLETED', paidAt: previousWindow },
+      _sum: { amount: true },
     }),
   ]);
 
+  const bookingsByStatus = countByStatus(bookingRows, BOOKING_STATUSES);
+  const listingsByStatus = countByStatus(listingRows, LISTING_STATUSES);
+
+  const guests = usersByRole.find((r) => r.role === 'GUEST')?._count._all ?? 0;
+  const hosts = usersByRole.find((r) => r.role === 'HOST')?._count._all ?? 0;
+
+  const revenue = grossRevenue._sum.amount ?? 0;
+  const payouts = completedPayouts._sum.amount ?? 0;
+
+  const revenueCurrentTotal = revenueCurrent._sum.amount ?? 0;
+  const revenuePreviousTotal = revenuePrevious._sum.amount ?? 0;
+
+  const totalBookings = Object.values(bookingsByStatus).reduce((sum, n) => sum + n, 0);
+  const totalListings = Object.values(listingsByStatus).reduce((sum, n) => sum + n, 0);
+
   return {
-    totalUsers,
-    totalListings,
-    totalBookings,
-    monthlyBookings,
-    totalRevenue: revenue._sum.hostPayout ?? 0,
+    totals: {
+      users: guests + hosts,
+      guests,
+      hosts,
+      listings: totalListings,
+      publishedListings: listingsByStatus.PUBLISHED,
+      bookings: totalBookings,
+      grossRevenue: revenue,
+      hostPayouts: payouts,
+      platformFees: revenue - payouts,
+    },
+    // Trailing 30 days against the 30 before it, so the dashboard shows direction
+    // and not just a running total.
+    deltas: {
+      users: { current: usersCurrent, previous: usersPrevious, changePct: percentChange(usersCurrent, usersPrevious) },
+      bookings: { current: bookingsCurrent, previous: bookingsPrevious, changePct: percentChange(bookingsCurrent, bookingsPrevious) },
+      revenue: { current: revenueCurrentTotal, previous: revenuePreviousTotal, changePct: percentChange(revenueCurrentTotal, revenuePreviousTotal) },
+    },
+    // Everything a moderator might have to act on today.
+    attention: {
+      openReports,
+      bookingsAwaitingHost: bookingsByStatus.AWAITING_HOST,
+      unpaidBookings: bookingsByStatus.PENDING,
+      pendingPayoutCount: pendingPayouts._count._all,
+      pendingPayoutAmount: pendingPayouts._sum.amount ?? 0,
+      suspendedUsers,
+      suspendedListings: listingsByStatus.SUSPENDED,
+      draftListings: listingsByStatus.DRAFT,
+      hiddenReviews,
+    },
+    bookingsByStatus,
+    listingsByStatus,
   };
+};
+
+/**
+ * Bookings created and revenue collected per day, with empty days filled in so
+ * the chart has no gaps. `generate_series` does the filling — grouping in JS
+ * would silently drop days with no activity and distort the shape.
+ */
+export const getStatsTimeseriesService = async (days: number) => {
+  const rows = await prisma.$queryRaw<
+    { date: string; bookings: number; revenue: number }[]
+  >`
+    SELECT to_char(d.day, 'YYYY-MM-DD')      AS date,
+           COALESCE(b.bookings, 0)::int      AS bookings,
+           COALESCE(p.revenue, 0)::float8    AS revenue
+      FROM generate_series(
+             (CURRENT_DATE - ((${days}::int - 1) * INTERVAL '1 day'))::date,
+             CURRENT_DATE,
+             INTERVAL '1 day'
+           ) AS d(day)
+      LEFT JOIN (
+             SELECT "createdAt"::date AS day, COUNT(*) AS bookings
+               FROM "Booking"
+              WHERE "createdAt" >= (CURRENT_DATE - ((${days}::int - 1) * INTERVAL '1 day'))
+              GROUP BY 1
+           ) b ON b.day = d.day
+      LEFT JOIN (
+             SELECT "paidAt"::date AS day, SUM("amount") AS revenue
+               FROM "Payment"
+              WHERE "status" = 'COMPLETED'
+                AND "paidAt" >= (CURRENT_DATE - ((${days}::int - 1) * INTERVAL '1 day'))
+              GROUP BY 1
+           ) p ON p.day = d.day
+     ORDER BY d.day
+  `;
+
+  return rows;
 };
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -640,4 +775,161 @@ export const getAdminProfileService = async (adminId: string) => {
     permissions: [...new Set(permissions)],
     createdAt: moderator.createdAt,
   };
+};
+
+// ─── Amenity Management ──────────────────────────────────────────────────────
+
+export const listAmenitiesAdminService = async (
+  search?: string,
+  category?: AmenityCategory,
+) => {
+  const where: Prisma.AmenityWhereInput = {};
+  if (search) where.name = { contains: search, mode: 'insensitive' };
+  if (category) where.category = category;
+
+  const amenities = await prisma.amenity.findMany({
+    where,
+    orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    include: { _count: { select: { listings: true } } },
+  });
+
+  return amenities.map((a) => ({
+    id: a.id,
+    name: a.name,
+    icon: a.icon,
+    category: a.category,
+    sortOrder: a.sortOrder,
+    listingCount: a._count.listings,
+  }));
+};
+
+export const createAmenityService = async (data: {
+  name: string;
+  icon?: string;
+  category: AmenityCategory;
+  sortOrder: number;
+}) => {
+  const existing = await prisma.amenity.findUnique({ where: { name: data.name } });
+  if (existing) throw new AppError('An amenity with this name already exists', 409);
+
+  const amenity = await prisma.amenity.create({
+    data: {
+      name: data.name,
+      icon: data.icon || null,
+      category: data.category,
+      sortOrder: data.sortOrder,
+    },
+  });
+
+  return { ...amenity, listingCount: 0 };
+};
+
+export const updateAmenityService = async (
+  amenityId: string,
+  data: { name?: string; icon?: string | null; category?: AmenityCategory; sortOrder?: number },
+) => {
+  const amenity = await prisma.amenity.findUnique({ where: { id: amenityId } });
+  if (!amenity) throw new AppError('Amenity not found', 404);
+
+  if (data.name && data.name !== amenity.name) {
+    const existing = await prisma.amenity.findUnique({ where: { name: data.name } });
+    if (existing) throw new AppError('An amenity with this name already exists', 409);
+  }
+
+  const updated = await prisma.amenity.update({
+    where: { id: amenityId },
+    data,
+    include: { _count: { select: { listings: true } } },
+  });
+
+  return {
+    id: updated.id,
+    name: updated.name,
+    icon: updated.icon,
+    category: updated.category,
+    sortOrder: updated.sortOrder,
+    listingCount: updated._count.listings,
+  };
+};
+
+export const deleteAmenityService = async (amenityId: string) => {
+  const amenity = await prisma.amenity.findUnique({
+    where: { id: amenityId },
+    include: { _count: { select: { listings: true } } },
+  });
+  if (!amenity) throw new AppError('Amenity not found', 404);
+
+  if (amenity._count.listings > 0) {
+    throw new AppError(
+      `This amenity is used by ${amenity._count.listings} listing(s) and cannot be deleted`,
+      409,
+    );
+  }
+
+  await prisma.amenity.delete({ where: { id: amenityId } });
+};
+
+// ─── Rule Template Management ────────────────────────────────────────────────
+// Hosts pick these when adding house rules. Rule text is copied onto the
+// listing at pick time, so edits and deletes here only affect future picks.
+
+export const listRuleTemplatesAdminService = async (search?: string) => {
+  const where: Prisma.RuleTemplateWhereInput = {};
+  if (search) where.text = { contains: search, mode: 'insensitive' };
+
+  const templates = await prisma.ruleTemplate.findMany({
+    where,
+    orderBy: [{ sortOrder: 'asc' }, { text: 'asc' }],
+  });
+
+  // How many listings already carry this rule (picked, not typed by the host).
+  const usage = await prisma.houseRule.groupBy({
+    by: ['ruleText'],
+    where: { isCustom: false, ruleText: { in: templates.map((t) => t.text) } },
+    _count: { ruleText: true },
+  });
+  const usageByText = new Map(usage.map((u) => [u.ruleText, u._count.ruleText]));
+
+  return templates.map((t) => ({
+    id: t.id,
+    text: t.text,
+    sortOrder: t.sortOrder,
+    listingCount: usageByText.get(t.text) ?? 0,
+  }));
+};
+
+export const createRuleTemplateService = async (data: { text: string; sortOrder: number }) => {
+  const existing = await prisma.ruleTemplate.findUnique({ where: { text: data.text } });
+  if (existing) throw new AppError('A rule with this text already exists', 409);
+
+  const template = await prisma.ruleTemplate.create({ data });
+  return { ...template, listingCount: 0 };
+};
+
+export const updateRuleTemplateService = async (
+  templateId: string,
+  data: { text?: string; sortOrder?: number },
+) => {
+  const template = await prisma.ruleTemplate.findUnique({ where: { id: templateId } });
+  if (!template) throw new AppError('Rule template not found', 404);
+
+  if (data.text && data.text !== template.text) {
+    const existing = await prisma.ruleTemplate.findUnique({ where: { text: data.text } });
+    if (existing) throw new AppError('A rule with this text already exists', 409);
+  }
+
+  const updated = await prisma.ruleTemplate.update({ where: { id: templateId }, data });
+  const listingCount = await prisma.houseRule.count({
+    where: { isCustom: false, ruleText: updated.text },
+  });
+
+  return { ...updated, listingCount };
+};
+
+export const deleteRuleTemplateService = async (templateId: string) => {
+  const template = await prisma.ruleTemplate.findUnique({ where: { id: templateId } });
+  if (!template) throw new AppError('Rule template not found', 404);
+
+  // Safe to delete outright — listings hold their own copy of the text.
+  await prisma.ruleTemplate.delete({ where: { id: templateId } });
 };

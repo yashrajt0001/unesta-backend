@@ -124,3 +124,39 @@ export const notifyPayoutSent = (hostId: string, amount: number, currency: strin
     title: 'Payout Sent',
     body: `A payout of ${currency} ${amount.toLocaleString()} has been sent to your account.`,
   });
+
+export const notifyBookingAwaitingHost = (guestId: string, listingTitle: string, minutes: number) =>
+  createNotification({
+    userId: guestId,
+    type: NotificationType.BOOKING_REQUEST,
+    title: 'Awaiting Host Confirmation',
+    body: `Payment received for "${listingTitle}". The host has ${minutes} minutes to confirm — you get a full refund if they don't.`,
+  });
+
+export const notifyBookingDeclined = (guestId: string, listingTitle: string, refundAmount: number | null) =>
+  createNotification({
+    userId: guestId,
+    type: NotificationType.BOOKING_CANCELLED,
+    title: 'Booking Declined',
+    body: refundAmount
+      ? `The host declined your booking for "${listingTitle}". A full refund of INR ${refundAmount.toLocaleString()} is on its way.`
+      : `The host declined your booking for "${listingTitle}".`,
+  });
+
+export const notifyBookingExpired = (guestId: string, listingTitle: string, refundAmount: number | null) =>
+  createNotification({
+    userId: guestId,
+    type: NotificationType.BOOKING_CANCELLED,
+    title: 'Booking Not Confirmed',
+    body: refundAmount
+      ? `The host did not confirm your booking for "${listingTitle}" in time. A full refund of INR ${refundAmount.toLocaleString()} is on its way.`
+      : `The host did not confirm your booking for "${listingTitle}" in time.`,
+  });
+
+export const notifyBookingExpiredHost = (hostId: string, listingTitle: string) =>
+  createNotification({
+    userId: hostId,
+    type: NotificationType.BOOKING_CANCELLED,
+    title: 'Booking Request Expired',
+    body: `You did not confirm a booking request for "${listingTitle}" in time. The guest has been refunded.`,
+  });

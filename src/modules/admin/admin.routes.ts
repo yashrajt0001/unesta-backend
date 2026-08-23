@@ -28,6 +28,14 @@ import {
   getListingDetail,
   getBookingDetail,
   changePassword,
+  listAmenitiesAdmin,
+  createAmenity,
+  updateAmenity,
+  deleteAmenity,
+  listRuleTemplatesAdmin,
+  createRuleTemplate,
+  updateRuleTemplate,
+  deleteRuleTemplate,
 } from './admin.controller.js';
 import {
   adminLoginSchema,
@@ -47,6 +55,14 @@ import {
   adminListingDetailSchema,
   adminBookingDetailSchema,
   changePasswordSchema,
+  listAmenitiesAdminSchema,
+  createAmenitySchema,
+  updateAmenitySchema,
+  amenityIdParamSchema,
+  listRuleTemplatesAdminSchema,
+  createRuleTemplateSchema,
+  updateRuleTemplateSchema,
+  ruleTemplateIdParamSchema,
 } from './admin.validation.js';
 
 const router = Router();
@@ -92,5 +108,17 @@ router.patch('/reviews/:id/toggle-visibility', validate(reviewIdParamSchema), to
 router.get('/financials', getFinancialSummary);
 router.get('/payments', validate(listPaymentsAdminSchema), listPaymentsAdmin);
 router.get('/payouts', validate(listPayoutsAdminSchema), listPayoutsAdmin);
+
+// Amenities
+router.get('/amenities', validate(listAmenitiesAdminSchema), listAmenitiesAdmin);
+router.post('/amenities', validate(createAmenitySchema), createAmenity);
+router.patch('/amenities/:id', validate(updateAmenitySchema), updateAmenity);
+router.delete('/amenities/:id', validate(amenityIdParamSchema), deleteAmenity);
+
+// Rule Templates
+router.get('/rule-templates', validate(listRuleTemplatesAdminSchema), listRuleTemplatesAdmin);
+router.post('/rule-templates', validate(createRuleTemplateSchema), createRuleTemplate);
+router.patch('/rule-templates/:id', validate(updateRuleTemplateSchema), updateRuleTemplate);
+router.delete('/rule-templates/:id', validate(ruleTemplateIdParamSchema), deleteRuleTemplate);
 
 export default router;

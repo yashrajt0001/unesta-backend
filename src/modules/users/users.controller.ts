@@ -18,7 +18,7 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const updateAvatar = asyncHandler(async (req: Request, res: Response) => {
-  const user = await updateAvatarService(req.user!.userId, req.body.avatarUrl);
+  const user = await updateAvatarService(req.user!.userId, req.body.key);
   res.status(200).json({ success: true, message: 'Avatar updated', data: user });
 });
 

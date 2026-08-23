@@ -1,5 +1,11 @@
 import { prisma, withDbRetry } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
+import { refundBookingPaymentService } from '../payments/payments.service.js';
+import {
+  notifyBookingConfirmed,
+  notifyBookingDeclined,
+  notifyBookingCancelled,
+} from '../notifications/notifications.service.js';
 import type { BookingStatus } from '@prisma/client';
 
 // Service fee percentages
@@ -26,6 +32,7 @@ const bookingSelectFull = {
   bookingType: true,
   specialRequests: true,
   guestMessage: true,
+  hostResponseDeadline: true,
   cancelledAt: true,
   cancellationReason: true,
   refundAmount: true,
@@ -77,7 +84,7 @@ async function checkDateConflicts(listingId: string, checkIn: string, checkOut: 
   const overlapping = await prisma.booking.findFirst({
     where: {
       listingId,
-      status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] },
+      status: { in: ['PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN'] },
       checkInDate: { lt: checkOutDate },
       checkOutDate: { gt: checkInDate },
       ...(excludeBookingId && { id: { not: excludeBookingId } }),
@@ -133,7 +140,7 @@ export const createBookingService = async (guestId: string, input: CreateBooking
     const overlapping = await tx.booking.findFirst({
       where: {
         listingId: input.listingId,
-        status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] },
+        status: { in: ['PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN'] },
         checkInDate: { lt: new Date(input.checkOutDate) },
         checkOutDate: { gt: new Date(input.checkInDate) },
       },
@@ -199,13 +206,21 @@ export const acceptBookingService = async (id: string, hostId: string) => {
   const booking = await prisma.booking.findUnique({ where: { id } });
   if (!booking) throw new AppError('Booking not found', 404);
   if (booking.hostId !== hostId) throw new AppError('Forbidden', 403);
-  if (booking.status !== 'PENDING') throw new AppError('Only pending bookings can be accepted', 400);
+  if (booking.status !== 'AWAITING_HOST') {
+    throw new AppError('Only bookings awaiting your confirmation can be accepted', 400);
+  }
+  if (booking.hostResponseDeadline && booking.hostResponseDeadline < new Date()) {
+    throw new AppError('The confirmation window has expired — the guest is being refunded', 400);
+  }
 
-  return prisma.booking.update({
+  const updated = await prisma.booking.update({
     where: { id },
     data: { status: 'CONFIRMED' },
     select: bookingSelectFull,
   });
+
+  await notifyBookingConfirmed(updated.guestId, updated.listing.title);
+  return updated;
 };
 
 // ─── Decline Booking ──────────────────────────────────────────────────────────
@@ -214,13 +229,26 @@ export const declineBookingService = async (id: string, hostId: string, reason?:
   const booking = await prisma.booking.findUnique({ where: { id } });
   if (!booking) throw new AppError('Booking not found', 404);
   if (booking.hostId !== hostId) throw new AppError('Forbidden', 403);
-  if (booking.status !== 'PENDING') throw new AppError('Only pending bookings can be declined', 400);
+  if (booking.status !== 'AWAITING_HOST') {
+    throw new AppError('Only bookings awaiting your confirmation can be declined', 400);
+  }
 
-  return prisma.booking.update({
+  // Guest already paid — declining refunds them in full.
+  const refundAmount = await refundBookingPaymentService(id, reason ?? 'Host declined the booking');
+
+  const updated = await prisma.booking.update({
     where: { id },
-    data: { status: 'DECLINED', cancellationReason: reason },
+    data: {
+      status: 'DECLINED',
+      cancelledAt: new Date(),
+      cancellationReason: reason,
+      refundAmount,
+    },
     select: bookingSelectFull,
   });
+
+  await notifyBookingDeclined(updated.guestId, updated.listing.title, refundAmount);
+  return updated;
 };
 
 // ─── Cancel Booking ───────────────────────────────────────────────────────────
@@ -233,21 +261,35 @@ export const cancelBookingService = async (id: string, userId: string, reason?: 
   const isHost = booking.hostId === userId;
   if (!isGuest && !isHost) throw new AppError('Forbidden', 403);
 
-  if (!['PENDING', 'CONFIRMED'].includes(booking.status)) {
+  if (!['PENDING', 'AWAITING_HOST', 'CONFIRMED'].includes(booking.status)) {
     throw new AppError('This booking cannot be cancelled', 400);
   }
 
   const status = isGuest ? 'CANCELLED_BY_GUEST' : 'CANCELLED_BY_HOST';
 
-  return prisma.booking.update({
+  // Cancelling before the host has confirmed always refunds the guest in full.
+  const refundAmount =
+    booking.status === 'AWAITING_HOST'
+      ? await refundBookingPaymentService(id, reason ?? 'Cancelled before host confirmation')
+      : null;
+
+  const updated = await prisma.booking.update({
     where: { id },
     data: {
       status,
       cancelledAt: new Date(),
       cancellationReason: reason,
+      refundAmount,
     },
     select: bookingSelectFull,
   });
+
+  await notifyBookingCancelled(
+    isGuest ? updated.hostId : updated.guestId,
+    updated.listing.title,
+    isGuest ? 'guest' : 'host',
+  );
+  return updated;
 };
 
 // ─── Check-in ─────────────────────────────────────────────────────────────────

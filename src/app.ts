@@ -18,6 +18,7 @@ import hostRoutes from './modules/host/host.routes.js';
 import notificationsRoutes from './modules/notifications/notifications.routes.js';
 import reportsRoutes from './modules/reports/reports.routes.js';
 import wishlistsRoutes from './modules/wishlists/wishlists.routes.js';
+import uploadsRoutes from './modules/uploads/uploads.routes.js';
 
 const app = express();
 
@@ -73,6 +74,7 @@ app.use('/api/host', hostRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/wishlists', wishlistsRoutes);
+app.use('/api/uploads', uploadsRoutes);
 // Mounted at /api (no sub-prefix) — must come after all specific /api/* routes
 // to prevent their router.use(authenticateUser) from intercepting unrelated paths
 app.use('/api', paymentsRoutes);

@@ -11,8 +11,10 @@ export const updateProfileSchema = z.object({
   }),
 });
 
+// The key comes from POST /api/uploads/presign — the browser has already PUT the
+// file to R2, so all we take here is the object key.
 export const updateAvatarSchema = z.object({
   body: z.object({
-    avatarUrl: z.string().url('Invalid URL format'),
+    key: z.string().min(1, 'Upload the photo first'),
   }),
 });

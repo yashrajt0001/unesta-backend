@@ -41,7 +41,7 @@ export const getMyBookingsSchema = z.object({
   query: z.object({
     role: z.enum(['guest', 'host']).optional().default('guest'),
     status: z.enum([
-      'PENDING', 'CONFIRMED', 'CHECKED_IN', 'COMPLETED',
+      'PENDING', 'AWAITING_HOST', 'CONFIRMED', 'CHECKED_IN', 'COMPLETED',
       'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST', 'DECLINED', 'EXPIRED',
     ]).optional(),
     page: z.coerce.number().int().positive().optional().default(1),

@@ -1,5 +1,11 @@
 import { prisma } from '../../common/config/database.js';
 import { AppError } from '../../common/middleware/error-handler.js';
+import {
+  assertObjectExists,
+  deleteObjectsByUrl,
+  isOwnedKey,
+  publicUrl,
+} from '../../common/utils/storage.js';
 
 export const getProfileService = async (userId: string) => {
   const user = await prisma.user.findUnique({
@@ -48,16 +54,26 @@ export const updateProfileService = async (
   });
 };
 
-export const updateAvatarService = async (userId: string, avatarUrl: string) => {
+export const updateAvatarService = async (userId: string, key: string) => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     throw new AppError('User not found', 404);
   }
 
-  return prisma.user.update({
+  // The key must be one we signed for this user, and the object must actually be
+  // in the bucket — otherwise the row would point at nothing.
+  if (!isOwnedKey(key, 'avatars', userId)) throw new AppError('Invalid upload key', 400);
+  await assertObjectExists(key);
+
+  const updated = await prisma.user.update({
     where: { id: userId },
-    data: { avatarUrl },
+    data: { avatarUrl: publicUrl(key) },
   });
+
+  // The old photo is now unreachable, so drop it from the bucket.
+  if (user.avatarUrl) await deleteObjectsByUrl([user.avatarUrl]);
+
+  return updated;
 };
 
 export const deleteAccountService = async (userId: string) => {

@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { authenticateUser, optionalAuthenticateUser } from '../../common/middleware/auth.middleware.js';
-import { uploadSingle } from '../../common/middleware/upload.middleware.js';
 import { validate } from '../../common/middleware/validate.js';
 import { cacheControl } from '../../common/middleware/cache-control.js';
 import {
@@ -16,6 +15,7 @@ import {
   getAvailability,
   getUnavailableDates,
   getAllAmenities,
+  getAllRuleTemplates,
   addListingImage,
   deleteListingImage,
   setCoverImage,
@@ -31,6 +31,7 @@ import {
   updateAvailabilitySchema,
   getAvailabilitySchema,
   getMyListingsSchema,
+  addListingImageSchema,
   deleteListingImageSchema,
   setCoverImageSchema,
   reorderImagesSchema,
@@ -39,8 +40,10 @@ import {
 const router = Router();
 
 // ─── Public ────────────────────────────────────────────────────────────────────
-// Amenities are a static reference list — cache hard.
-router.get('/amenities', cacheControl('public', 3600), getAllAmenities);
+// Amenities are a reference list, but admin-editable — cache briefly.
+router.get('/amenities', cacheControl('public', 300), getAllAmenities);
+// Rule templates are admin-editable reference data too — same short cache.
+router.get('/rule-templates', cacheControl('public', 300), getAllRuleTemplates);
 router.get('/:id/availability', cacheControl('public', 60), validate(getAvailabilitySchema), getAvailability);
 router.get('/:id/unavailable-dates', cacheControl('public', 60), validate(getAvailabilitySchema), getUnavailableDates);
 // Detail body carries per-user `isSaved` → private, browser-only cache.
@@ -61,7 +64,7 @@ router.delete('/:id/house-rules/:ruleId', validate(deleteHouseRuleSchema), delet
 
 router.put('/:id/availability', validate(updateAvailabilitySchema), updateAvailability);
 
-router.post('/:id/images', uploadSingle, addListingImage);
+router.post('/:id/images', validate(addListingImageSchema), addListingImage);
 router.put('/:id/images/reorder', validate(reorderImagesSchema), reorderImages);
 router.delete('/:id/images/:imageId', validate(deleteListingImageSchema), deleteListingImage);
 router.patch('/:id/images/:imageId/cover', validate(setCoverImageSchema), setCoverImage);
